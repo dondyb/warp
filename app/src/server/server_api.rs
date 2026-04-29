@@ -1424,4 +1424,43 @@ impl Entity for ServerApiProvider {
     type Event = ServerApiEvent;
 }
 
+#[cfg(test)]
+mod m1a_dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn openai_protocol_returns_not_implemented_error() {
+        std::env::set_var("WARP_AI_PROTOCOL", "openai");
+        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
+        let server_api = ServerApi::new_for_test();
+        let request = warp_multi_agent_api::Request::default();
+        let err = rt
+            .block_on(server_api.generate_multi_agent_output(&request))
+            .err()
+            .expect("expected Err for openai protocol");
+        assert!(
+            format!("{err:#}").contains("OpenAI adapter is not yet implemented"),
+            "unexpected error: {err:#}"
+        );
+        std::env::remove_var("WARP_AI_PROTOCOL");
+    }
+
+    #[test]
+    fn anthropic_protocol_returns_not_implemented_error() {
+        std::env::set_var("WARP_AI_PROTOCOL", "anthropic");
+        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
+        let server_api = ServerApi::new_for_test();
+        let request = warp_multi_agent_api::Request::default();
+        let err = rt
+            .block_on(server_api.generate_multi_agent_output(&request))
+            .err()
+            .expect("expected Err for anthropic protocol");
+        assert!(
+            format!("{err:#}").contains("Anthropic adapter is not yet implemented"),
+            "unexpected error: {err:#}"
+        );
+        std::env::remove_var("WARP_AI_PROTOCOL");
+    }
+}
+
 impl SingletonEntity for ServerApiProvider {}
