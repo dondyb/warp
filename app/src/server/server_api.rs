@@ -24,6 +24,9 @@ use crate::server::graphql::default_request_options;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use ai::AIClient;
 use ai_provider::Protocol;
+#[allow(unused_imports)]
+pub use ai_provider::{AIApiError, DeserializationError};
+use ai_provider::{WARP_ERROR_CODE_HEADER, WARP_ERROR_CODE_OUT_OF_CREDITS};
 use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine;
@@ -130,11 +133,6 @@ impl ServerTime {
         self.time_at_fetch + elapsed
     }
 }
-
-pub use ai_provider::{
-    AIApiError, DeserializationError, WARP_ERROR_CODE_HEADER, WARP_ERROR_CODE_OUT_OF_CREDITS,
-};
-
 
 #[derive(thiserror::Error, Debug)]
 pub enum TranscribeError {
