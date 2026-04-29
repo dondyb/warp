@@ -1073,6 +1073,28 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
+        // Protocol dispatch (M1a). When the user has not selected a custom
+        // provider, fall through to the existing Warp-hosted implementation.
+        // OpenAI and Anthropic adapters land in M1b/M2; for now they
+        // produce a clear error rather than silently calling Warp.
+        match ai_provider::resolve_protocol_from_env() {
+            ai_provider::Protocol::Warp => {
+                // fall through to the existing implementation below
+            }
+            ai_provider::Protocol::OpenAi => {
+                return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                    "WARP_AI_PROTOCOL=openai requested, but the OpenAI adapter \
+                     is not yet implemented (planned for M1b)"
+                ))));
+            }
+            ai_provider::Protocol::Anthropic => {
+                return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                    "WARP_AI_PROTOCOL=anthropic requested, but the Anthropic \
+                     adapter is not yet implemented (planned for M2)"
+                ))));
+            }
+        }
+
         let auth_token = self
             .get_or_refresh_access_token()
             .await
