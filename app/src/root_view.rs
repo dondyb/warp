@@ -1751,7 +1751,14 @@ impl RootView {
             workspace_setting,
         };
 
-        let auth_onboarding_state = if auth_state.is_logged_in() {
+        let auth_onboarding_state = if !ChannelState::is_cloud_enabled() {
+            // OSS / fork build: warp.dev integration is disabled. Skip
+            // onboarding and login slides; boot straight to the terminal.
+            // M4b will hide the cloud-feature surfaces inside the workspace;
+            // M4c gates telemetry. Until then, those surfaces are visible
+            // but inert.
+            AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
+        } else if auth_state.is_logged_in() {
             AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
         } else {
             cfg_if! {
