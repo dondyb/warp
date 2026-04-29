@@ -110,6 +110,27 @@ impl OpenAiAdapter {
             ]
         }))
     }
+
+    /// Extract a text delta from an OpenAI streaming response chunk.
+    /// Returns `Ok(Some(text))` for content deltas, `Ok(None)` for chunks
+    /// without content (role-only first chunk, finish_reason-only last
+    /// chunk, etc.), or `Err` if the JSON cannot be parsed.
+    pub(crate) fn extract_text_delta(
+        &self,
+        chunk_json: &str,
+    ) -> std::result::Result<Option<String>, Arc<AIApiError>> {
+        let v: serde_json::Value = serde_json::from_str(chunk_json).map_err(|e| {
+            Arc::new(AIApiError::Other(anyhow::anyhow!(
+                "OpenAI adapter: failed to parse SSE chunk JSON: {e:#}"
+            )))
+        })?;
+        // Standard OpenAI shape: { "choices": [{ "delta": { "content": "..." } }] }
+        let content = v
+            .pointer("/choices/0/delta/content")
+            .and_then(|c| c.as_str())
+            .map(|s| s.to_string());
+        Ok(content)
+    }
 }
 
 /// Minimal system prompt for M1b-chat. Keeps the model in "helpful coding
@@ -299,5 +320,44 @@ mod tests {
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[1]["content"], "how are you");
+    }
+
+    fn make_adapter() -> OpenAiAdapter {
+        OpenAiAdapter::new(OpenAiConfig {
+            endpoint: "https://example.test/v1".into(),
+            api_key: "sk-x".into(),
+            model: "gpt-4o-mini".into(),
+        })
+    }
+
+    #[test]
+    fn extracts_text_delta_from_content_chunk() {
+        let adapter = make_adapter();
+        let chunk = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}"#;
+        let delta = adapter.extract_text_delta(chunk).expect("delta");
+        assert_eq!(delta, Some("Hello".to_string()));
+    }
+
+    #[test]
+    fn returns_none_for_role_only_first_chunk() {
+        let adapter = make_adapter();
+        let chunk = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#;
+        let delta = adapter.extract_text_delta(chunk).expect("ok");
+        assert_eq!(delta, None);
+    }
+
+    #[test]
+    fn returns_none_for_finish_chunk() {
+        let adapter = make_adapter();
+        let chunk = r#"{"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#;
+        let delta = adapter.extract_text_delta(chunk).expect("ok");
+        assert_eq!(delta, None);
+    }
+
+    #[test]
+    fn errors_on_malformed_json() {
+        let adapter = make_adapter();
+        let err = adapter.extract_text_delta("not json").expect_err("err");
+        assert!(format!("{err:#}").contains("failed to parse"));
     }
 }
