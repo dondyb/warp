@@ -26,5 +26,6 @@ warp_multi_agent_api.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 mockito.workspace = true
+rustls.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 warp_multi_agent_api.workspace = true

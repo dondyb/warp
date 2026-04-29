@@ -389,7 +389,18 @@ impl AiProvider for OpenAiAdapter {
         // Phase 2: streaming deltas. Capture owned IDs into the closure.
         let task_id = ids.task_id.clone();
         let message_id = ids.message_id.clone();
-        let body_stream = event_source.filter_map(move |event| {
+        // Stop polling EventSource as soon as the HTTP response body ends.
+        // Without this `take_while`, the default ExponentialBackoff retry policy
+        // would reconnect indefinitely, preventing the closing events from ever
+        // being emitted by the chained `closing_stream`.
+        let body_stream = event_source
+            .take_while(|e| {
+                futures::future::ready(!matches!(
+                    e,
+                    Err(reqwest_eventsource::Error::StreamEnded)
+                ))
+            })
+            .filter_map(move |event| {
             let task_id = task_id.clone();
             let message_id = message_id.clone();
             async move {
@@ -408,7 +419,6 @@ impl AiProvider for OpenAiAdapter {
                             Err(e) => Some(Err(e)),
                         }
                     }
-                    Err(reqwest_eventsource::Error::StreamEnded) => None,
                     Err(e) => Some(Err(Arc::new(
                         AIApiError::from_stream_error("OpenAiAdapter", e).await,
                     ))),
