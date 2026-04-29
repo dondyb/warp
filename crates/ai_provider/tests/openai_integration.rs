@@ -111,3 +111,90 @@ async fn happy_path_emits_canonical_transaction_sequence() {
     assert_eq!(extract_append_text(&events[2]), Some("Hello".into()));
     assert_eq!(extract_append_text(&events[3]), Some(" world".into()));
 }
+
+#[tokio::test]
+async fn returns_error_for_401_unauthorized() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(401)
+        .with_body(r#"{"error":{"message":"Invalid API key","type":"invalid_request_error"}}"#)
+        .create_async()
+        .await;
+
+    let adapter = OpenAiAdapter::new(OpenAiConfig {
+        endpoint: server.url(),
+        api_key: "sk-bad".into(),
+        model: "gpt-4o-mini".into(),
+    });
+    // The error may surface either at chat_stream() or as the first stream item.
+    match adapter.chat_stream(&make_request("hi")).await {
+        Ok(mut stream) => {
+            // Walk events until we hit an error or stream ends. The opening
+            // events (StreamInit + ClientActions for begin/create/add) might
+            // be emitted before the body fetch fails — that's fine, just
+            // confirm SOME event errors before the stream is exhausted.
+            let mut saw_error = false;
+            while let Some(item) = stream.next().await {
+                if item.is_err() {
+                    saw_error = true;
+                    break;
+                }
+            }
+            assert!(saw_error, "expected at least one Err event for 401");
+        }
+        Err(_) => { /* error surfaced synchronously — also acceptable */ }
+    }
+}
+
+#[tokio::test]
+async fn errors_when_request_has_no_user_query() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let adapter = OpenAiAdapter::new(OpenAiConfig {
+        endpoint: "http://localhost:1".into(),
+        api_key: "sk-x".into(),
+        model: "gpt-4o-mini".into(),
+    });
+    let req = Request::default(); // no input
+    let result = adapter.chat_stream(&req).await;
+    let err = match result {
+        Err(e) => e,
+        Ok(_) => panic!("expected error but got Ok"),
+    };
+    assert!(format!("{err:#}").contains("Request.input is missing"));
+}
+
+#[tokio::test]
+async fn errors_on_malformed_sse_chunk() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let mut server = mockito::Server::new_async().await;
+    let body = sse_chunk("not valid json");
+    let _m = server
+        .mock("POST", "/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let adapter = OpenAiAdapter::new(OpenAiConfig {
+        endpoint: server.url(),
+        api_key: "sk-test".into(),
+        model: "gpt-4o-mini".into(),
+    });
+    let mut stream = adapter.chat_stream(&make_request("hi")).await.expect("stream");
+
+    // Collect events until error or stream end.
+    let mut saw_error = false;
+    while let Some(item) = stream.next().await {
+        if item.is_err() {
+            saw_error = true;
+            break;
+        }
+    }
+    assert!(saw_error, "expected error from malformed JSON");
+}
