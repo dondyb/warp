@@ -1424,6 +1424,8 @@ impl Entity for ServerApiProvider {
     type Event = ServerApiEvent;
 }
 
+impl SingletonEntity for ServerApiProvider {}
+
 #[cfg(test)]
 mod m1a_dispatch_tests {
     use super::*;
@@ -1462,5 +1464,3 @@ mod m1a_dispatch_tests {
         std::env::remove_var("WARP_AI_PROTOCOL");
     }
 }
-
-impl SingletonEntity for ServerApiProvider {}
