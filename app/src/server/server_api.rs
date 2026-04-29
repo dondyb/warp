@@ -896,10 +896,10 @@ impl ServerApi {
                 let adapter = warp_adapter::WarpServerAdapter::new(self.clone());
                 ai_provider::AiProvider::chat_stream(&adapter, request).await
             }
-            Protocol::OpenAi => Err(Arc::new(AIApiError::Other(anyhow!(
-                "WARP_AI_PROTOCOL=openai requested, but the OpenAI adapter \
-                 is not yet implemented (planned for M1b-chat)"
-            )))),
+            Protocol::OpenAi => {
+                let adapter = ai_provider::OpenAiAdapter::from_env()?;
+                ai_provider::AiProvider::chat_stream(&adapter, request).await
+            }
             Protocol::Anthropic => Err(Arc::new(AIApiError::Other(anyhow!(
                 "WARP_AI_PROTOCOL=anthropic requested, but the Anthropic \
                  adapter is not yet implemented (planned for M2)"
@@ -1260,7 +1260,7 @@ mod m1a_dispatch_tests {
             .err()
             .expect("expected Err for openai protocol");
         assert!(
-            format!("{err:#}").contains("OpenAI adapter is not yet implemented"),
+            format!("{err:#}").contains("requires WARP_AI_OPENAI_API_KEY"),
             "unexpected error: {err:#}"
         );
         std::env::remove_var("WARP_AI_PROTOCOL");
