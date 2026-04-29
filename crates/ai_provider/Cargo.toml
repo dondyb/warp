@@ -18,10 +18,12 @@ reqwest.workspace = true
 reqwest-eventsource.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 warp_multi_agent_api.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 async-trait.workspace = true
 futures.workspace = true
+mockito.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 warp_multi_agent_api.workspace = true

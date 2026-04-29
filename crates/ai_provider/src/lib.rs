@@ -12,6 +12,7 @@
 
 pub mod client;
 pub mod error;
+pub mod openai;
 
 pub use client::{AiProvider, ResponseEventStream};
 pub use error::{
