@@ -341,6 +341,111 @@ pub(crate) fn build_stream_finished_done() -> ResponseEvent {
     }
 }
 
+use crate::{AiProvider, ResponseEventStream};
+use futures::StreamExt;
+
+#[async_trait::async_trait]
+impl AiProvider for OpenAiAdapter {
+    async fn chat_stream(
+        &self,
+        request: &Request,
+    ) -> std::result::Result<ResponseEventStream, Arc<AIApiError>> {
+        // Translate the Warp request to OpenAI JSON.
+        let body = self.build_request_body(request)?;
+        let url = format!("{}/chat/completions", self.config.endpoint.trim_end_matches('/'));
+
+        // Lazily get the reqwest client (OnceLock from Task 3 TLS workaround).
+        let client = self.client.get_or_init(reqwest::Client::new);
+
+        // Build the POST request using .json() so the body stays as Bytes
+        // (required for EventSource::new which calls try_clone internally).
+        let request_builder = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .json(&body);
+
+        // Open the SSE stream.
+        let event_source = reqwest_eventsource::EventSource::new(request_builder)
+            .map_err(|e| {
+                Arc::new(AIApiError::Other(anyhow::anyhow!(
+                    "OpenAI adapter: failed to open SSE stream: {e:#}"
+                )))
+            })?;
+
+        // Synthesize a fresh set of Warp IDs for this stream.
+        let ids = StreamIds::new();
+
+        // Phase 1: opening events (Init, BeginTransaction, CreateTask, AddMessagesToTask).
+        let opening: Vec<std::result::Result<ResponseEvent, Arc<AIApiError>>> = vec![
+            Ok(build_stream_init(&ids)),
+            Ok(build_client_actions(vec![
+                action_begin_transaction(),
+                action_create_task(&ids.task_id),
+                action_add_empty_agent_output_message(&ids.task_id, &ids.message_id),
+            ])),
+        ];
+        let opening_stream = futures::stream::iter(opening);
+
+        // Phase 2: streaming deltas. Capture owned IDs into the closure.
+        let task_id = ids.task_id.clone();
+        let message_id = ids.message_id.clone();
+        let body_stream = event_source.filter_map(move |event| {
+            let task_id = task_id.clone();
+            let message_id = message_id.clone();
+            async move {
+                match event {
+                    Ok(reqwest_eventsource::Event::Open) => None,
+                    Ok(reqwest_eventsource::Event::Message(msg)) => {
+                        // OpenAI emits a final `data: [DONE]` line that should be ignored.
+                        if msg.data == "[DONE]" {
+                            return None;
+                        }
+                        match parse_delta(&msg.data) {
+                            Ok(Some(delta)) => Some(Ok(build_client_actions(vec![
+                                action_append_text(&task_id, &message_id, &delta),
+                            ]))),
+                            Ok(None) => None,
+                            Err(e) => Some(Err(e)),
+                        }
+                    }
+                    Err(reqwest_eventsource::Error::StreamEnded) => None,
+                    Err(e) => Some(Err(Arc::new(
+                        AIApiError::from_stream_error("OpenAiAdapter", e).await,
+                    ))),
+                }
+            }
+        });
+
+        // Phase 3: closing events.
+        let closing: Vec<std::result::Result<ResponseEvent, Arc<AIApiError>>> = vec![
+            Ok(build_client_actions(vec![action_commit_transaction()])),
+            Ok(build_stream_finished_done()),
+        ];
+        let closing_stream = futures::stream::iter(closing);
+
+        // Concatenate.
+        let combined = opening_stream.chain(body_stream).chain(closing_stream);
+        Ok(Box::pin(combined))
+    }
+}
+
+/// Free-function form of `extract_text_delta` so it can be called from inside
+/// the streaming closure (which can't capture `&self`). Same logic as the
+/// method on `OpenAiAdapter`; mirroring it as a free fn keeps the closure
+/// `'static` without requiring an `Arc<OpenAiAdapter>`.
+fn parse_delta(chunk_json: &str) -> std::result::Result<Option<String>, Arc<AIApiError>> {
+    let v: serde_json::Value = serde_json::from_str(chunk_json).map_err(|e| {
+        Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "OpenAI adapter: failed to parse SSE chunk JSON: {e:#}"
+        )))
+    })?;
+    let content = v
+        .pointer("/choices/0/delta/content")
+        .and_then(|c| c.as_str())
+        .map(|s| s.to_string());
+    Ok(content)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
