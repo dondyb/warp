@@ -23,6 +23,7 @@ use crate::auth::auth_state::AuthState;
 use crate::server::graphql::default_request_options;
 use crate::server::server_api::presigned_upload::HttpStatusError;
 use ai::AIClient;
+use ai_provider::Protocol;
 use auth::{AuthClient, AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 use base64::prelude::BASE64_URL_SAFE;
 use base64::Engine;
@@ -1078,17 +1079,17 @@ impl ServerApi {
         // OpenAI and Anthropic adapters land in M1b/M2; for now they
         // produce a clear error rather than silently calling Warp.
         match ai_provider::resolve_protocol_from_env() {
-            ai_provider::Protocol::Warp => {
+            Protocol::Warp => {
                 // fall through to the existing implementation below
             }
-            ai_provider::Protocol::OpenAi => {
-                return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            Protocol::OpenAi => {
+                return Err(Arc::new(AIApiError::Other(anyhow!(
                     "WARP_AI_PROTOCOL=openai requested, but the OpenAI adapter \
                      is not yet implemented (planned for M1b)"
                 ))));
             }
-            ai_provider::Protocol::Anthropic => {
-                return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            Protocol::Anthropic => {
+                return Err(Arc::new(AIApiError::Other(anyhow!(
                     "WARP_AI_PROTOCOL=anthropic requested, but the Anthropic \
                      adapter is not yet implemented (planned for M2)"
                 ))));
