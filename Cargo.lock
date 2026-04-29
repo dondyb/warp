@@ -370,11 +370,13 @@ dependencies = [
  "futures",
  "http 1.1.0",
  "http_client",
+ "hyper 1.8.1",
  "prost 0.14.3",
  "reqwest",
  "reqwest-eventsource",
  "serde_json",
  "thiserror 2.0.17",
+ "warp_core",
  "warp_multi_agent_api",
 ]
 
