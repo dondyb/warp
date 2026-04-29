@@ -180,6 +180,167 @@ pub(crate) fn extract_user_query(
     }
 }
 
+use warp_multi_agent_api::{ResponseEvent, Task, Message};
+use warp_multi_agent_api::response_event;
+use warp_multi_agent_api::client_action;
+use warp_multi_agent_api::message;
+
+/// A fresh set of synthesized IDs for an OpenAI streaming response.
+/// Same shape as the IDs Warp's hosted backend would issue, but
+/// generated locally because OpenAI doesn't return them.
+pub(crate) struct StreamIds {
+    pub conversation_id: String,
+    pub request_id: String,
+    pub run_id: String,
+    pub task_id: String,
+    pub message_id: String,
+}
+
+impl StreamIds {
+    pub(crate) fn new() -> Self {
+        Self {
+            conversation_id: uuid::Uuid::new_v4().to_string(),
+            request_id: uuid::Uuid::new_v4().to_string(),
+            run_id: uuid::Uuid::new_v4().to_string(),
+            task_id: uuid::Uuid::new_v4().to_string(),
+            message_id: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+}
+
+/// Build the `StreamInit` ResponseEvent.
+pub(crate) fn build_stream_init(ids: &StreamIds) -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::Init(
+            response_event::StreamInit {
+                conversation_id: ids.conversation_id.clone(),
+                request_id: ids.request_id.clone(),
+                run_id: ids.run_id.clone(),
+            },
+        )),
+    }
+}
+
+/// Build a `ClientActions` ResponseEvent containing the given actions.
+pub(crate) fn build_client_actions(
+    actions: Vec<warp_multi_agent_api::ClientAction>,
+) -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::ClientActions(
+            response_event::ClientActions { actions },
+        )),
+    }
+}
+
+/// Build a `BeginTransaction` action.
+pub(crate) fn action_begin_transaction() -> warp_multi_agent_api::ClientAction {
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::BeginTransaction(
+            client_action::BeginTransaction {},
+        )),
+    }
+}
+
+/// Build a `CommitTransaction` action.
+pub(crate) fn action_commit_transaction() -> warp_multi_agent_api::ClientAction {
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::CommitTransaction(
+            client_action::CommitTransaction {},
+        )),
+    }
+}
+
+/// Build a `CreateTask` action with a minimal Task carrying just the id.
+pub(crate) fn action_create_task(task_id: &str) -> warp_multi_agent_api::ClientAction {
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::CreateTask(
+            client_action::CreateTask {
+                task: Some(Task {
+                    id: task_id.to_string(),
+                    ..Default::default()
+                }),
+            },
+        )),
+    }
+}
+
+/// Build an `AddMessagesToTask` action that seeds the task with one empty
+/// `AgentOutput` message — subsequent `AppendToMessageContent` actions
+/// stream text into its `text` field.
+pub(crate) fn action_add_empty_agent_output_message(
+    task_id: &str,
+    message_id: &str,
+) -> warp_multi_agent_api::ClientAction {
+    let msg = Message {
+        id: message_id.to_string(),
+        task_id: task_id.to_string(),
+        message: Some(message::Message::AgentOutput(
+            message::AgentOutput {
+                text: String::new(),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::AddMessagesToTask(
+            client_action::AddMessagesToTask {
+                task_id: task_id.to_string(),
+                messages: vec![msg],
+            },
+        )),
+    }
+}
+
+/// Build an `AppendToMessageContent` action that appends `delta` to the
+/// agent output's text. The mask `"agent_output.text"` tells the client
+/// to append the message's `agent_output.text` to the existing message
+/// in place, rather than replace it.
+pub(crate) fn action_append_text(
+    task_id: &str,
+    message_id: &str,
+    delta: &str,
+) -> warp_multi_agent_api::ClientAction {
+    let msg = Message {
+        id: message_id.to_string(),
+        task_id: task_id.to_string(),
+        message: Some(message::Message::AgentOutput(
+            message::AgentOutput {
+                text: delta.to_string(),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::AppendToMessageContent(
+            client_action::AppendToMessageContent {
+                task_id: task_id.to_string(),
+                message: Some(msg),
+                mask: Some(::prost_types::FieldMask {
+                    paths: vec!["agent_output.text".to_string()],
+                }),
+            },
+        )),
+    }
+}
+
+/// Build the final `StreamFinished{Done}` event.
+pub(crate) fn build_stream_finished_done() -> ResponseEvent {
+    ResponseEvent {
+        r#type: Some(response_event::Type::Finished(
+            response_event::StreamFinished {
+                reason: Some(
+                    response_event::stream_finished::Reason::Done(
+                        response_event::stream_finished::Done {},
+                    ),
+                ),
+                ..Default::default()
+            },
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +520,33 @@ mod tests {
         let adapter = make_adapter();
         let err = adapter.extract_text_delta("not json").expect_err("err");
         assert!(format!("{err:#}").contains("failed to parse"));
+    }
+
+    #[test]
+    fn stream_ids_are_unique_uuids() {
+        let ids = StreamIds::new();
+        assert_ne!(ids.conversation_id, ids.request_id);
+        assert!(uuid::Uuid::parse_str(&ids.conversation_id).is_ok());
+        assert!(uuid::Uuid::parse_str(&ids.task_id).is_ok());
+    }
+
+    #[test]
+    fn append_text_action_has_correct_mask() {
+        let action = action_append_text("task-1", "msg-1", "hello");
+        match action.action.as_ref().unwrap() {
+            client_action::Action::AppendToMessageContent(a) => {
+                assert_eq!(a.task_id, "task-1");
+                let mask = a.mask.as_ref().expect("mask");
+                assert_eq!(mask.paths, vec!["agent_output.text"]);
+                let msg = a.message.as_ref().expect("message");
+                match msg.message.as_ref().unwrap() {
+                    message::Message::AgentOutput(out) => {
+                        assert_eq!(out.text, "hello");
+                    }
+                    _ => panic!("expected AgentOutput"),
+                }
+            }
+            _ => panic!("expected AppendToMessageContent"),
+        }
     }
 }

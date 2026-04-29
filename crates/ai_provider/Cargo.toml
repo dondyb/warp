@@ -13,6 +13,7 @@ http.workspace = true
 http_client.workspace = true
 hyper.workspace = true
 prost.workspace = true
+prost-types.workspace = true
 warp_core.workspace = true
 reqwest.workspace = true
 reqwest-eventsource.workspace = true
