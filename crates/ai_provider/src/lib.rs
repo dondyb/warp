@@ -10,6 +10,14 @@
 //! M1b adds the `AiProvider` trait, `OpenAiAdapter`, and a `WarpServerAdapter`
 //! wrapping the current behavior.
 
+pub mod client;
+pub mod error;
+
+pub use client::AiProvider;
+pub use error::{
+    AIApiError, DeserializationError, WARP_ERROR_CODE_HEADER, WARP_ERROR_CODE_OUT_OF_CREDITS,
+};
+
 /// Selected backend for AI requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
