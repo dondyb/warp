@@ -19,7 +19,6 @@ fn make_request(query: &str) -> Request {
                         ),
                     ),
                 }],
-                ..Default::default()
             })),
             ..Default::default()
         }),
