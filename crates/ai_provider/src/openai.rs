@@ -232,6 +232,41 @@ impl StreamIds {
             message_id: uuid::Uuid::new_v4().to_string(),
         }
     }
+
+    /// Build IDs for a request: reuse `conversation_id` and `task_id` from
+    /// the incoming request if present (multi-turn continuation), otherwise
+    /// synthesize fresh ones (fresh conversation).
+    pub(crate) fn for_request(request: &Request) -> Self {
+        let mut ids = Self::new();
+        if let Some(metadata) = request.metadata.as_ref() {
+            if !metadata.conversation_id.is_empty() {
+                ids.conversation_id = metadata.conversation_id.clone();
+            }
+        }
+        // Reuse the LAST task in TaskContext if any.
+        if let Some(task_context) = request.task_context.as_ref() {
+            if let Some(last_task) = task_context.tasks.last() {
+                if !last_task.id.is_empty() {
+                    ids.task_id = last_task.id.clone();
+                }
+            }
+        }
+        ids
+    }
+
+    /// Returns true if the request is a continuation (the task already
+    /// existed before this request) — controls whether we emit a CreateTask
+    /// action in the transaction sequence.
+    pub(crate) fn is_continuation(request: &Request) -> bool {
+        request
+            .metadata
+            .as_ref()
+            .is_some_and(|m| !m.conversation_id.is_empty())
+            || request
+                .task_context
+                .as_ref()
+                .is_some_and(|tc| !tc.tasks.is_empty())
+    }
 }
 
 /// Build the `StreamInit` ResponseEvent.
@@ -396,17 +431,27 @@ impl AiProvider for OpenAiAdapter {
                 )))
             })?;
 
-        // Synthesize a fresh set of Warp IDs for this stream.
-        let ids = StreamIds::new();
+        // Synthesize or reuse Warp IDs for this stream.
+        let ids = StreamIds::for_request(request);
+        let is_continuation = StreamIds::is_continuation(request);
+        log::info!(
+            "[ai_provider::openai] chat_stream: conversation_id={} (continuation={}), task_id={}",
+            ids.conversation_id,
+            is_continuation,
+            ids.task_id
+        );
 
-        // Phase 1: opening events (Init, BeginTransaction, CreateTask, AddMessagesToTask).
+        // Phase 1: opening events (Init, BeginTransaction, [CreateTask,] AddMessagesToTask).
+        let mut opening_actions: Vec<warp_multi_agent_api::ClientAction> = Vec::new();
+        opening_actions.push(action_begin_transaction());
+        if !is_continuation {
+            opening_actions.push(action_create_task(&ids.task_id));
+        }
+        opening_actions.push(action_add_empty_agent_output_message(&ids.task_id, &ids.message_id));
+
         let opening: Vec<std::result::Result<ResponseEvent, Arc<AIApiError>>> = vec![
             Ok(build_stream_init(&ids)),
-            Ok(build_client_actions(vec![
-                action_begin_transaction(),
-                action_create_task(&ids.task_id),
-                action_add_empty_agent_output_message(&ids.task_id, &ids.message_id),
-            ])),
+            Ok(build_client_actions(opening_actions)),
         ];
         let opening_stream = futures::stream::iter(opening);
 
@@ -691,5 +736,44 @@ mod tests {
             }
             _ => panic!("expected AppendToMessageContent"),
         }
+    }
+
+    #[test]
+    fn for_request_reuses_conversation_id_when_set() {
+        let request = warp_multi_agent_api::Request {
+            metadata: Some(req::Metadata {
+                conversation_id: "existing-conv".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ids = StreamIds::for_request(&request);
+        assert_eq!(ids.conversation_id, "existing-conv");
+        assert!(StreamIds::is_continuation(&request));
+    }
+
+    #[test]
+    fn for_request_reuses_task_id_when_present() {
+        let request = warp_multi_agent_api::Request {
+            task_context: Some(warp_multi_agent_api::request::TaskContext {
+                tasks: vec![warp_multi_agent_api::Task {
+                    id: "existing-task".to_string(),
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+        let ids = StreamIds::for_request(&request);
+        assert_eq!(ids.task_id, "existing-task");
+        assert!(StreamIds::is_continuation(&request));
+    }
+
+    #[test]
+    fn for_request_synthesizes_fresh_when_default() {
+        let request = warp_multi_agent_api::Request::default();
+        let ids = StreamIds::for_request(&request);
+        assert!(uuid::Uuid::parse_str(&ids.conversation_id).is_ok());
+        assert!(uuid::Uuid::parse_str(&ids.task_id).is_ok());
+        assert!(!StreamIds::is_continuation(&request));
     }
 }

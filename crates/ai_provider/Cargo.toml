@@ -12,6 +12,7 @@ futures.workspace = true
 http.workspace = true
 http_client.workspace = true
 hyper.workspace = true
+log.workspace = true
 prost.workspace = true
 prost-types.workspace = true
 warp_core.workspace = true
