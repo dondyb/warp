@@ -98,8 +98,70 @@ impl OpenAiConfig {
     }
 }
 
+use std::collections::HashMap;
 use serde_json::json;
 use warp_multi_agent_api::{Request, request as req};
+
+/// Accumulator for streaming OpenAI tool calls. OpenAI sends each
+/// `tool_calls[i]` field across multiple SSE chunks (e.g., `name` in
+/// the first chunk, then `arguments` partial JSON in subsequent
+/// chunks). We assemble per-`index` until we receive a chunk with
+/// `finish_reason == "tool_calls"`.
+#[derive(Default, Debug)]
+struct ToolCallAccumulator {
+    /// index → (id, name, accumulated_args_json_string)
+    inflight: HashMap<u32, AccumulatedToolCall>,
+}
+
+#[derive(Default, Debug, Clone)]
+struct AccumulatedToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl ToolCallAccumulator {
+    fn ingest_chunk(&mut self, chunk: &serde_json::Value) {
+        // Extract choices[0].delta.tool_calls[*]
+        let Some(tcs) = chunk
+            .pointer("/choices/0/delta/tool_calls")
+            .and_then(|v| v.as_array())
+        else {
+            return;
+        };
+        for tc in tcs {
+            let Some(index) = tc.get("index").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let entry = self.inflight.entry(index as u32).or_default();
+            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                if !id.is_empty() {
+                    entry.id = id.to_string();
+                }
+            }
+            if let Some(func) = tc.get("function") {
+                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                    if !name.is_empty() {
+                        entry.name = name.to_string();
+                    }
+                }
+                if let Some(args_part) = func.get("arguments").and_then(|v| v.as_str()) {
+                    entry.arguments.push_str(args_part);
+                }
+            }
+        }
+    }
+
+    fn drain_completed(&mut self) -> Vec<AccumulatedToolCall> {
+        // Collect entries with their keys so we can sort by index.
+        let mut indexed: Vec<(u32, AccumulatedToolCall)> = self
+            .inflight
+            .drain()
+            .collect();
+        indexed.sort_by_key(|(k, _)| *k);
+        indexed.into_iter().map(|(_, v)| v).collect()
+    }
+}
 
 /// `AiProvider` impl that translates Warp's protobuf request to/from the
 /// OpenAI Chat Completions HTTP API.
@@ -423,6 +485,50 @@ pub(crate) fn build_stream_finished_done() -> ResponseEvent {
     }
 }
 
+/// Build a `ClientAction` that adds a `Message::ToolCall` to the conversation
+/// task. The actual proto `ToolCall` variant is decoded by the registered
+/// `ToolDefinition` for this tool name. If the tool name is unknown,
+/// emit the message with `tool: None` (the client may render it as "unknown tool").
+fn build_tool_call_action(
+    task_id: &str,
+    accumulated: &AccumulatedToolCall,
+) -> warp_multi_agent_api::ClientAction {
+    let registry = crate::ToolRegistry::default();
+    let tool_def = registry.by_name(&accumulated.name);
+
+    let tool_variant = if let Some(tool_def) = tool_def {
+        let args_value = serde_json::from_str::<serde_json::Value>(&accumulated.arguments)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+        match tool_def.decode_call_args(args_value) {
+            Ok(t) => Some(t),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+
+    let tool_call_msg = warp_multi_agent_api::Message {
+        id: uuid::Uuid::new_v4().to_string(),
+        task_id: task_id.to_string(),
+        message: Some(message::Message::ToolCall(
+            message::ToolCall {
+                tool_call_id: accumulated.id.clone(),
+                tool: tool_variant,
+            },
+        )),
+        ..Default::default()
+    };
+
+    warp_multi_agent_api::ClientAction {
+        action: Some(client_action::Action::AddMessagesToTask(
+            client_action::AddMessagesToTask {
+                task_id: task_id.to_string(),
+                messages: vec![tool_call_msg],
+            },
+        )),
+    }
+}
+
 use crate::{AiProvider, ResponseEventStream};
 use futures::StreamExt;
 
@@ -481,6 +587,14 @@ impl AiProvider for OpenAiAdapter {
         // Phase 2: streaming deltas. Capture owned IDs into the closure.
         let task_id = ids.task_id.clone();
         let message_id = ids.message_id.clone();
+
+        // Accumulator for tool_calls deltas across SSE chunks.
+        // Wrapped in Arc<Mutex<...>> because the filter_map closure captures by
+        // move and the future it returns is polled across async boundaries.
+        let tool_accumulator = std::sync::Arc::new(
+            std::sync::Mutex::new(ToolCallAccumulator::default()),
+        );
+
         // Stop polling EventSource as soon as the HTTP response body ends.
         // Without this `take_while`, the default ExponentialBackoff retry policy
         // would reconnect indefinitely, preventing the closing events from ever
@@ -495,6 +609,7 @@ impl AiProvider for OpenAiAdapter {
             .filter_map(move |event| {
             let task_id = task_id.clone();
             let message_id = message_id.clone();
+            let tool_accumulator = tool_accumulator.clone();
             async move {
                 match event {
                     Ok(reqwest_eventsource::Event::Open) => None,
@@ -507,7 +622,37 @@ impl AiProvider for OpenAiAdapter {
                             Ok(Some(delta)) => Some(Ok(build_client_actions(vec![
                                 action_append_text(&task_id, &message_id, &delta),
                             ]))),
-                            Ok(None) => None,
+                            Ok(None) => {
+                                // Check for tool_calls delta or finish_reason.
+                                if let Ok(chunk_json) =
+                                    serde_json::from_str::<serde_json::Value>(&msg.data)
+                                {
+                                    tool_accumulator
+                                        .lock()
+                                        .unwrap()
+                                        .ingest_chunk(&chunk_json);
+
+                                    // If finish_reason == "tool_calls", emit the assembled
+                                    // tool calls as a single ClientActions event.
+                                    let finish = chunk_json
+                                        .pointer("/choices/0/finish_reason")
+                                        .and_then(|v| v.as_str());
+                                    if finish == Some("tool_calls") {
+                                        let calls = tool_accumulator
+                                            .lock()
+                                            .unwrap()
+                                            .drain_completed();
+                                        if !calls.is_empty() {
+                                            let actions: Vec<_> = calls
+                                                .iter()
+                                                .map(|tc| build_tool_call_action(&task_id, tc))
+                                                .collect();
+                                            return Some(Ok(build_client_actions(actions)));
+                                        }
+                                    }
+                                }
+                                None
+                            }
                             Err(e) => Some(Err(e)),
                         }
                     }
