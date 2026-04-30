@@ -7121,11 +7121,16 @@ impl Workspace {
             }
         });
 
+        let default_landing = if ChannelState::is_cloud_enabled() {
+            SettingsSection::default()
+        } else {
+            SettingsSection::AiProvider
+        };
         let panes_layout = PanesLayout::Snapshot(Box::new(PaneNodeSnapshot::Leaf(LeafSnapshot {
             is_focused: true,
             custom_vertical_tabs_title: None,
             contents: LeafContents::Settings(SettingsPaneSnapshot::Local {
-                current_page: page.unwrap_or_default(),
+                current_page: page.unwrap_or(default_landing),
                 search_query: search_query.map(|s| s.to_owned()),
             }),
         })));
