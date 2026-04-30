@@ -1,89 +1,105 @@
-<a href="https://www.warp.dev">
-    <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
-</a>
+# WarpOss — fork with bring-your-own LLM endpoint
 
-<p align="center">
-  <a href="https://www.warp.dev">Website</a>
-  ·
-  <a href="https://www.warp.dev/code">Code</a>
-  ·
-  <a href="https://www.warp.dev/agents">Agents</a>
-  ·
-  <a href="https://www.warp.dev/terminal">Terminal</a>
-  ·
-  <a href="https://www.warp.dev/drive">Drive</a>
-  ·
-  <a href="https://docs.warp.dev">Docs</a>
-  ·
-  <a href="https://www.warp.dev/blog/how-warp-works">How Warp Works</a>
-</p>
+This is a fork of [warpdotdev/warp](https://github.com/warpdotdev/warp) that strips out the warp.dev account, login wizard, and cloud surfaces, and replaces them with a Settings page where you point Warp at any OpenAI- or Anthropic-compatible LLM endpoint (LiteLLM, OpenRouter, Ollama, vLLM, your own gateway — anything that speaks `/v1/chat/completions`).
 
-> [!NOTE]
-> OpenAI is the founding sponsor of the new, open-source Warp repository, and the new agentic management workflows are powered by GPT models.
+It runs as the `Channel::Oss` build (`WarpOss.app`) and ships with full agentic tool use (18 client-side tools — shell, file edits, grep, ripgrep, MCP, etc.) wired through the same Warp protobuf transaction protocol the upstream client uses.
 
-<h1></h1>
+## What's different from upstream
 
-## About
+- **No login required.** OSS channel boots straight to a terminal — no onboarding wizard, no warp.dev account.
+- **AI Provider settings tab.** Configure endpoint URL, API key, model, and protocol (OpenAI or Anthropic) in Settings → AI Provider. Click **Connect** to fetch the endpoint's `/v1/models` list and pick a model from the dropdown.
+- **API key stored in TOML.** Lives in `~/Library/Application Support/dev.warp.WarpOss/settings.toml` (mode 0600). No more macOS Keychain re-prompt on every rebuild.
+- **Cloud surfaces hidden in OSS mode.** Account page, billing, teams, referrals, Warp Drive, the avatar/user-menu pulldown, the per-profile Base/Full-terminal model dropdowns, the inline `/MODEL` picker, and the Resource Center lightbulb are all gated behind `ChannelState::is_cloud_enabled()`.
+- **Single global model.** One model per Warp instance, set in AI Provider settings.
 
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+## Build & run
 
-## Installation
+### Prerequisites (macOS)
 
-You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
+- Xcode Command Line Tools
+- Rust toolchain (rustup) — installs the version pinned in `rust-toolchain.toml` automatically
+- Node + yarn (via corepack) — `corepack enable`
+
+### Build the OSS app
+
+```bash
+cd app
+cargo bundle --bin warp-oss
+```
+
+The bundled app lands at:
+
+```
+target/debug/bundle/osx/WarpOss.app
+```
+
+For a release build:
+
+```bash
+cd app
+cargo bundle --bin warp-oss --release
+```
+
+### Launch
+
+```bash
+open target/debug/bundle/osx/WarpOss.app
+```
+
+On first launch macOS may show a Gatekeeper prompt because the binary is ad-hoc signed. Right-click → Open if needed.
+
+### Configure your LLM endpoint
+
+1. Open Settings (gear icon in the top tab bar).
+2. Go to **AI Provider**.
+3. Fill in:
+   - **Endpoint URL** — e.g. `https://api.openai.com/v1`, `http://localhost:11434/v1` (Ollama), `http://localhost:4000/v1` (LiteLLM), etc.
+   - **API key**.
+   - **Protocol** — OpenAI for now (Anthropic native is stubbed).
+4. Click **Connect**. The Model dropdown populates with whatever the endpoint returns from `/v1/models`. Pick one.
+5. Open a terminal and try `/agent`.
+
+## Tests & lints
+
+From the repo root:
+
+```bash
+cargo clippy -p ai_provider -p warp --tests --all-targets -- -D warnings
+cargo nextest run -p ai_provider --no-fail-fast
+```
+
+The `ai_provider` crate has integration tests (mockito-backed) covering the OpenAI adapter happy path, error paths, and tool-call round-trip.
+
+## Repository layout (additions specific to this fork)
+
+```
+crates/ai_provider/        OpenAI adapter, tool definitions, dispatcher glue
+app/src/settings/ai_provider.rs       Settings group (endpoint/api_key/model/protocol)
+app/src/settings_view/ai_provider_page.rs   Settings UI
+docs/superpowers/specs/    Design docs for the fork
+docs/superpowers/plans/    Implementation plans (M1a → M1c → polish-1)
+```
+
+## Upstream sync
+
+This fork pins to a snapshot of `warpdotdev/warp`. To pull upstream changes manually:
+
+```bash
+git fetch upstream
+git merge upstream/master   # resolve any conflicts
+```
+
+Push to upstream is disabled on this clone (`upstream` push URL is `DISABLE`).
 
 ## Licensing
 
-Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
+Inherited from upstream:
 
-The rest of the code in this repository is licensed under the [AGPL v3](LICENSE-AGPL).
+- Warp's UI framework (`warpui_core` and `warpui` crates) is [MIT](LICENSE-MIT).
+- The rest of the code is [AGPL v3](LICENSE-AGPL).
 
-## Open Source & Contributing
+This fork's additions are released under the same terms as the file they live in.
 
-Warp's client codebase is open source and lives in this repository. We welcome community contributions and have designed a lightweight workflow to help new contributors get started. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
+## Acknowledgements
 
-### Issue to PR
-
-Before filing, [search existing issues](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+sort%3Areactions-%2B1-desc) for your bug or feature request. If nothing exists, [file an issue](https://github.com/warpdotdev/warp/issues/new/choose) using our templates. Security vulnerabilities should be reported privately as described in [CONTRIBUTING.md](CONTRIBUTING.md#reporting-security-issues).
-
-Once filed, a Warp maintainer reviews the issue and may apply a readiness label: [`ready-to-spec`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-spec) signals the design is open for contributors to spec out, and [`ready-to-implement`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-implement) signals the design is settled and code PRs are welcome. Anyone can pick up a labeled issue — mention **@oss-maintainers** on an issue if you'd like it considered for a readiness label.
-
-### Building the Repo Locally
-
-To build and run Warp from source:
-
-```bash
-./script/bootstrap   # platform-specific setup
-./script/run         # build and run Warp
-./script/presubmit   # fmt, clippy, and tests
-```
-
-See [WARP.md](WARP.md) for the full engineering guide, including coding style, testing, and platform-specific notes.
-
-## Joining the Team
-
-Interested in joining the team? See our [open roles](https://www.warp.dev/careers).
-
-## Support and Questions
-
-1. See our [docs](https://docs.warp.dev/) for a comprehensive guide to Warp's features.
-2. Join our [Slack Community](https://go.warp.dev/join-preview) to connect with other users and get help from the Warp team.
-3. Try our [Preview build](https://www.warp.dev/download-preview) to test the latest experimental features.
-4. Mention **@oss-maintainers** on any issue to escalate to the team — for example, if you encounter problems with the automated agents.
-
-## Code of Conduct
-
-We ask everyone to be respectful and empathetic. Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
-
-## Open Source Dependencies
-
-We'd like to call out a few of the [open source dependencies](https://docs.warp.dev/help/licenses) that have helped Warp to get off the ground:
-
-* [Tokio](https://github.com/tokio-rs/tokio)
-* [NuShell](https://github.com/nushell/nushell)
-* [Fig Completion Specs](https://github.com/withfig/autocomplete)
-* [Warp Server Framework](https://github.com/seanmonstar/warp)
-* [Alacritty](https://github.com/alacritty/alacritty)
-* [Hyper HTTP library](https://github.com/hyperium/hyper)
-* [FontKit](https://github.com/servo/font-kit)
-* [Core-foundation](https://github.com/servo/core-foundation-rs)
-* [Smol](https://github.com/smol-rs/smol)
+All credit for the terminal and the agentic block UI goes to [the Warp team](https://github.com/warpdotdev/warp). This fork only swaps out the LLM provider plumbing and trims the cloud-tied UI; everything else is upstream's work.
