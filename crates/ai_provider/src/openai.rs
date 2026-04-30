@@ -248,43 +248,26 @@ const SYSTEM_PROMPT: &str = "You are a helpful AI assistant integrated into a \
 
 /// Extract the user's most recent query from a Warp `Request`.
 /// Looks at `Input::user_inputs.user_query` (the current path) and the
-/// deprecated `Input::user_query`. Other input variants produce an error
-/// because M1b-chat does not yet support them.
+/// deprecated `Input::user_query`. Returns `None` if no UserQuery is found,
+/// which can happen in tool-result-only continuations.
 ///
 /// Used in tests; the main path now goes through `build_messages_from_request`.
-#[allow(dead_code, deprecated)]
-pub(crate) fn extract_user_query(
-    request: &Request,
-) -> std::result::Result<String, Arc<AIApiError>> {
-    let Some(input) = request.input.as_ref() else {
-        return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
-            "OpenAI adapter: Request.input is missing"
-        ))));
-    };
-    match input.r#type.as_ref() {
-        Some(req::input::Type::UserInputs(user_inputs)) => {
-            // Find the most recent UserQuery in the inputs list.
-            let query = user_inputs.inputs.iter().rev().find_map(|ui| match ui.input.as_ref() {
-                Some(req::input::user_inputs::user_input::Input::UserQuery(uq)) => {
+pub(crate) fn extract_user_query(request: &Request) -> Option<String> {
+    let input = request.input.as_ref()?;
+    use warp_multi_agent_api::request::input;
+    let input_type = input.r#type.as_ref()?;
+    match input_type {
+        input::Type::UserInputs(user_inputs) => {
+            user_inputs.inputs.iter().rev().find_map(|ui| match ui.input.as_ref() {
+                Some(input::user_inputs::user_input::Input::UserQuery(uq)) => {
                     Some(uq.query.clone())
                 }
                 _ => None,
-            });
-            query.ok_or_else(|| {
-                Arc::new(AIApiError::Other(anyhow::anyhow!(
-                    "OpenAI adapter: UserInputs contained no UserQuery (other input variants \
-                     such as ToolCallResult are not yet supported in M1b-chat)"
-                )))
             })
         }
-        Some(req::input::Type::UserQuery(uq)) => Ok(uq.query.clone()),
-        Some(other) => Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
-            "OpenAI adapter: input variant {other:?} is not yet supported \
-             (planned for M1c+)"
-        )))),
-        None => Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
-            "OpenAI adapter: Request.input.type is missing"
-        )))),
+        #[allow(deprecated)]
+        input::Type::UserQuery(uq) => Some(uq.query.clone()),
+        _ => None,
     }
 }
 
@@ -953,15 +936,15 @@ mod tests {
     #[test]
     fn extracts_user_query_from_user_inputs() {
         let req = build_request_with_query("hello world");
-        let q = extract_user_query(&req).expect("query");
-        assert_eq!(q, "hello world");
+        let q = extract_user_query(&req);
+        assert_eq!(q, Some("hello world".to_string()));
     }
 
     #[test]
-    fn extract_errors_when_input_missing() {
+    fn extract_returns_none_when_input_missing() {
         let req = Request::default();
-        let err = extract_user_query(&req).expect_err("err");
-        assert!(format!("{err:#}").contains("Request.input is missing"));
+        let q = extract_user_query(&req);
+        assert_eq!(q, None);
     }
 
     #[test]
