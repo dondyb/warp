@@ -8,7 +8,7 @@ It runs as the `Channel::Oss` build (`WarpOss.app`) and ships with full agentic 
 
 - **No login required.** OSS channel boots straight to a terminal — no onboarding wizard, no warp.dev account.
 - **AI Provider settings tab.** Configure endpoint URL, API key, model, and protocol (OpenAI or Anthropic) in Settings → AI Provider. Click **Connect** to fetch the endpoint's `/v1/models` list and pick a model from the dropdown.
-- **API key stored in TOML.** Lives in `~/Library/Application Support/dev.warp.WarpOss/settings.toml` (mode 0600). No more macOS Keychain re-prompt on every rebuild.
+- **API key stored in macOS UserDefaults.** Lives in `~/Library/Preferences/dev.warp.WarpOss.plist` (mode 0600), keyed by `AiProviderApiKey`. No more macOS Keychain re-prompt on every rebuild — UserDefaults is gated by bundle ID, not code signature.
 - **Cloud surfaces hidden in OSS mode.** Account page, billing, teams, referrals, Warp Drive, the avatar/user-menu pulldown, the per-profile Base/Full-terminal model dropdowns, the inline `/MODEL` picker, and the Resource Center lightbulb are all gated behind `ChannelState::is_cloud_enabled()`.
 - **Single global model.** One model per Warp instance, set in AI Provider settings.
 
@@ -43,7 +43,7 @@ cargo bundle --bin warp-oss --release
 ### Launch
 
 ```bash
-open target/debug/bundle/osx/WarpOss.app
+open target/debug/bundle/osx/Woz.app
 ```
 
 On first launch macOS may show a Gatekeeper prompt because the binary is ad-hoc signed. Right-click → Open if needed.
@@ -58,6 +58,19 @@ On first launch macOS may show a Gatekeeper prompt because the binary is ad-hoc 
    - **Protocol** — OpenAI for now (Anthropic native is stubbed).
 4. Click **Connect**. The Model dropdown populates with whatever the endpoint returns from `/v1/models`. Pick one.
 5. Open a terminal and try `/agent`.
+
+### Where the AI Provider settings live
+
+Settings are split between two stores depending on how `private` they are:
+
+| Setting    | Store                                                    | Why                                            |
+|------------|----------------------------------------------------------|------------------------------------------------|
+| `endpoint` | `~/.warp-oss/settings.toml` `[ai_provider]`              | Public TOML, hand-editable                     |
+| `model`    | `~/.warp-oss/settings.toml` `[ai_provider]`              | Public TOML, hand-editable                     |
+| `protocol` | `~/.warp-oss/settings.toml` `[ai_provider]`              | Public TOML, hand-editable                     |
+| `api_key`  | `~/Library/Preferences/dev.warp.WarpOss.plist` (`AiProviderApiKey`) | macOS UserDefaults; mode 0600. Read with `defaults read dev.warp.WarpOss AiProviderApiKey` |
+
+UserDefaults is gated by bundle ID (`dev.warp.WarpOss`), not by code signature, so you don't get re-prompted across rebuilds the way Keychain would.
 
 ## Tests & lints
 
