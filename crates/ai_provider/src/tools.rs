@@ -85,12 +85,9 @@ impl Default for ToolRegistry {
 
 impl ToolRegistry {
     pub fn new() -> Self {
-        let reg = Self { tools: Vec::new() };
-        // Per-tool registrations get added by Phase B + Phase C tasks:
-        //   reg.tools.push(&run_shell_command::TOOL);
-        //   reg.tools.push(&read_search::READ_FILES);
-        //   ... etc.
-        reg
+        Self {
+            tools: vec![&run_shell_command::TOOL],
+        }
     }
 
     /// Look up a tool by its OpenAI function name.
@@ -156,7 +153,7 @@ impl ToolRegistry {
 }
 
 // Submodules — populated in Phase B + Phase C:
-// pub mod run_shell_command;
+pub mod run_shell_command;
 // pub mod read_search;
 // pub mod edit_write;
 // pub mod misc;
@@ -166,14 +163,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_registry_emits_empty_tools_array() {
+    fn registry_emits_tools_array() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.openai_tools_json(), serde_json::json!([]));
+        let tools = reg.openai_tools_json();
+        let arr = tools.as_array().unwrap();
+        assert!(!arr.is_empty());
+        assert!(arr.iter().any(|t| t["function"]["name"] == "run_shell_command"));
     }
 
     #[test]
-    fn empty_registry_lookup_misses() {
+    fn registry_lookup_misses_unknown() {
         let reg = ToolRegistry::new();
-        assert!(reg.by_name("anything").is_none());
+        assert!(reg.by_name("anything_unknown").is_none());
+    }
+
+    #[test]
+    fn registry_lookup_hits_run_shell_command() {
+        let reg = ToolRegistry::new();
+        assert!(reg.by_name("run_shell_command").is_some());
     }
 }
