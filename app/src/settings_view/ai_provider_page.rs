@@ -29,6 +29,22 @@ use warpui::{
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+use warpui_extras::secure_storage::AppContextExt as _;
+
+/// Secure-storage key for the user's BYO LLM API key. Distinct from
+/// `crates/ai/src/api_keys.rs`'s `"AiApiKeys"` (which stores Warp's
+/// hosted-AI keys) so the two don't collide.
+const API_KEY_STORAGE_KEY: &str = "BringYourOwnLlmApiKey";
+
+fn load_byo_api_key(ctx: &warpui::AppContext) -> Option<String> {
+    ctx.secure_storage().read_value(API_KEY_STORAGE_KEY).ok()
+}
+
+fn save_byo_api_key(ctx: &warpui::AppContext, key: &str) {
+    if let Err(e) = ctx.secure_storage().write_value(API_KEY_STORAGE_KEY, key) {
+        log::warn!("failed to save BYO LLM API key to secure storage: {e:#}");
+    }
+}
 
 // ── Page action ──────────────────────────────────────────────────────────────
 
@@ -118,9 +134,13 @@ impl AiProviderConfigWidget {
             editor
         });
 
+        let saved_key = load_byo_api_key(ctx).unwrap_or_default();
         let api_key_editor = ctx.add_typed_action_view(move |ctx| {
-            let mut editor = EditorView::single_line(make_editor_options(false), ctx);
+            let mut editor = EditorView::single_line(make_editor_options(true), ctx);
             editor.set_placeholder_text("sk-...", ctx);
+            if !saved_key.is_empty() {
+                editor.set_buffer_text(&saved_key, ctx);
+            }
             editor
         });
 
@@ -166,6 +186,14 @@ impl AiProviderConfigWidget {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.model.set_value(text, ctx);
                 });
+            }
+        });
+
+        // Save API key on every edit (secure storage, not TOML).
+        ctx.subscribe_to_view(&api_key_editor, |_me, editor_handle, event, ctx| {
+            if let EditorEvent::Edited(_) = event {
+                let text = editor_handle.as_ref(ctx).buffer_text(ctx);
+                save_byo_api_key(ctx, &text);
             }
         });
 
