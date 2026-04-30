@@ -86,7 +86,16 @@ impl Default for ToolRegistry {
 impl ToolRegistry {
     pub fn new() -> Self {
         Self {
-            tools: vec![&run_shell_command::TOOL],
+            tools: vec![
+                &run_shell_command::TOOL,
+                &read_search::READ_FILES,
+                &read_search::READ_DOCUMENTS,
+                &read_search::GREP,
+                &read_search::FILE_GLOB_V2,
+                &read_search::READ_SHELL_COMMAND_OUTPUT,
+                &read_search::READ_SKILL,
+                &read_search::READ_MCP_RESOURCE,
+            ],
         }
     }
 
@@ -154,7 +163,7 @@ impl ToolRegistry {
 
 // Submodules — populated in Phase B + Phase C:
 pub mod run_shell_command;
-// pub mod read_search;
+pub mod read_search;
 // pub mod edit_write;
 // pub mod misc;
 
