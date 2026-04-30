@@ -887,10 +887,28 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
-        // Protocol dispatch. For Warp's hosted backend (the default), construct
-        // a WarpServerAdapter and route through the AiProvider trait. For other
-        // protocols, M1b-chat/M2 will plug in their own adapters; until then we
-        // return a clear error rather than silently calling Warp.
+        use warp_core::channel::ChannelState;
+
+        // OSS mode: AI never goes to warp.dev — always use the user's
+        // configured AI Provider. Without this short-circuit, the default
+        // `Protocol::Warp` arm calls `generate_multi_agent_output_via_warp`,
+        // which fails on `get_or_refresh_access_token` for users who
+        // haven't logged in to warp.dev (which is everyone in OSS).
+        if !ChannelState::is_cloud_enabled() {
+            let config = ai_provider::runtime_config()
+                .map(Ok)
+                .unwrap_or_else(ai_provider::OpenAiConfig::from_env)
+                .map_err(|_| {
+                    Arc::new(AIApiError::Other(anyhow!(
+                        "No AI provider configured. Open Settings → AI Provider \
+                         and enter your endpoint, API key, and model."
+                    )))
+                })?;
+            let adapter = ai_provider::OpenAiAdapter::new(config);
+            return ai_provider::AiProvider::chat_stream(&adapter, request).await;
+        }
+
+        // Cloud mode (warp.dev): dispatch by protocol env var.
         match ai_provider::resolve_protocol_from_env() {
             Protocol::Warp => {
                 let adapter = warp_adapter::WarpServerAdapter::new(self.clone());
@@ -1252,37 +1270,27 @@ impl SingletonEntity for ServerApiProvider {}
 mod m1a_dispatch_tests {
     use super::*;
 
+    // In OSS mode (`ChannelState::is_cloud_enabled() == false`, which is always
+    // the case in tests), the OSS short-circuit fires before protocol dispatch.
+    // With no AI provider configured via `runtime_config()` or env vars the user
+    // should see a clear Settings-directed message rather than a raw env-var hint.
     #[test]
-    fn openai_protocol_returns_not_implemented_error() {
-        std::env::set_var("WARP_AI_PROTOCOL", "openai");
+    fn oss_mode_returns_no_ai_provider_configured_error() {
         let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
         let server_api = Arc::new(ServerApi::new_for_test());
         let request = warp_multi_agent_api::Request::default();
         let err = rt
             .block_on(server_api.generate_multi_agent_output(&request))
             .err()
-            .expect("expected Err for openai protocol");
+            .expect("expected Err when no AI provider is configured in OSS mode");
         assert!(
-            format!("{err:#}").contains("requires WARP_AI_OPENAI_API_KEY"),
+            format!("{err:#}").contains("No AI provider configured"),
             "unexpected error: {err:#}"
         );
-        std::env::remove_var("WARP_AI_PROTOCOL");
     }
 
-    #[test]
-    fn anthropic_protocol_returns_not_implemented_error() {
-        std::env::set_var("WARP_AI_PROTOCOL", "anthropic");
-        let rt = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
-        let server_api = Arc::new(ServerApi::new_for_test());
-        let request = warp_multi_agent_api::Request::default();
-        let err = rt
-            .block_on(server_api.generate_multi_agent_output(&request))
-            .err()
-            .expect("expected Err for anthropic protocol");
-        assert!(
-            format!("{err:#}").contains("Anthropic adapter is not yet implemented"),
-            "unexpected error: {err:#}"
-        );
-        std::env::remove_var("WARP_AI_PROTOCOL");
-    }
+    // The Anthropic test is intentionally omitted: in OSS mode the OSS
+    // short-circuit fires before the protocol-dispatch `match`, so the
+    // Anthropic arm is unreachable. A properly-scoped Anthropic test will
+    // be re-added in M2 when the Anthropic adapter is implemented.
 }
