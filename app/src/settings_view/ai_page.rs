@@ -2513,13 +2513,16 @@ impl TypedActionView for AISettingsPageView {
                 ctx.notify();
             }
             AISettingsPageAction::AttemptLoginGatedUpgrade => {
-                AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                    auth_manager.attempt_login_gated_feature(
-                        action.into(),
-                        AuthViewVariant::RequireLoginCloseable,
-                        ctx,
-                    )
-                });
+                if ChannelState::is_cloud_enabled() {
+                    AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
+                        auth_manager.attempt_login_gated_feature(
+                            action.into(),
+                            AuthViewVariant::RequireLoginCloseable,
+                            ctx,
+                        )
+                    });
+                }
+                // else: no-op in OSS; button is hidden when cloud is disabled
             }
             AISettingsPageAction::RemoveCLIAgentToolbarEnabledCommand(command) => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
@@ -3409,74 +3412,81 @@ impl SettingsWidget for UsageWidget {
             appearance,
         );
 
-        let auth_state = AuthStateProvider::as_ref(app).get();
-        let upgrade_cta_text_fragments = if let Some(team) =
-            UserWorkspaces::as_ref(app).current_team()
-        {
-            let current_user_email = auth_state.user_email().unwrap_or_default();
-            let has_admin_permissions = team.has_admin_permissions(&current_user_email);
-            if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
-                let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
-                if has_admin_permissions {
-                    vec![
-                        FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
-                        FormattedTextFragment::plain_text(" to get more AI usage."),
-                    ]
+        let mut usage_column = Flex::column();
+        usage_column.add_child(render_separator(appearance));
+        usage_column.add_child(usage_header);
+        usage_column.add_child(request_usage_row);
+
+        if ChannelState::is_cloud_enabled() {
+            let auth_state = AuthStateProvider::as_ref(app).get();
+            let upgrade_cta_text_fragments = if let Some(team) =
+                UserWorkspaces::as_ref(app).current_team()
+            {
+                let current_user_email = auth_state.user_email().unwrap_or_default();
+                let has_admin_permissions = team.has_admin_permissions(&current_user_email);
+                if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
+                    let upgrade_url = UserWorkspaces::upgrade_link_for_team(team.uid);
+                    if has_admin_permissions {
+                        vec![
+                            FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
+                            FormattedTextFragment::plain_text(" to get more AI usage."),
+                        ]
+                    } else {
+                        // The /upgrade page says to contact their administrator.
+                        vec![
+                            FormattedTextFragment::hyperlink("Compare plans", upgrade_url),
+                            FormattedTextFragment::plain_text(" for more AI usage."),
+                        ]
+                    }
                 } else {
-                    // The /upgrade page says to contact their administrator.
                     vec![
-                        FormattedTextFragment::hyperlink("Compare plans", upgrade_url),
+                        FormattedTextFragment::hyperlink(
+                            "Contact support",
+                            "mailto:support@warp.dev",
+                        ),
                         FormattedTextFragment::plain_text(" for more AI usage."),
                     ]
                 }
             } else {
+                let user_id = auth_state.user_id().unwrap_or_default();
+                let upgrade_url = UserWorkspaces::upgrade_link(user_id);
                 vec![
-                    FormattedTextFragment::hyperlink("Contact support", "mailto:support@warp.dev"),
-                    FormattedTextFragment::plain_text(" for more AI usage."),
+                    FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
+                    FormattedTextFragment::plain_text(" to get more AI usage."),
                 ]
+            };
+
+            let mut upgrade_cta = FormattedTextElement::new(
+                FormattedText::new([FormattedTextLine::Line(upgrade_cta_text_fragments)]),
+                appearance.ui_font_size(),
+                appearance.ui_font_family(),
+                appearance.ui_font_family(),
+                blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1()),
+                self.requests_highlight_index.clone(),
+            )
+            .with_hyperlink_font_color(appearance.theme().accent().into_solid());
+
+            if AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
+            {
+                upgrade_cta = upgrade_cta.register_default_click_handlers(|_, ctx, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::AttemptLoginGatedUpgrade);
+                });
+            } else {
+                upgrade_cta = upgrade_cta.register_default_click_handlers(|url, ctx, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
+                })
             }
-        } else {
-            let user_id = auth_state.user_id().unwrap_or_default();
-            let upgrade_url = UserWorkspaces::upgrade_link(user_id);
-            vec![
-                FormattedTextFragment::hyperlink("Upgrade", upgrade_url),
-                FormattedTextFragment::plain_text(" to get more AI usage."),
-            ]
-        };
 
-        let mut upgrade_cta = FormattedTextElement::new(
-            FormattedText::new([FormattedTextLine::Line(upgrade_cta_text_fragments)]),
-            appearance.ui_font_size(),
-            appearance.ui_font_family(),
-            appearance.ui_font_family(),
-            blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1()),
-            self.requests_highlight_index.clone(),
-        )
-        .with_hyperlink_font_color(appearance.theme().accent().into_solid());
-
-        if AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
-        {
-            upgrade_cta = upgrade_cta.register_default_click_handlers(|_, ctx, _| {
-                ctx.dispatch_typed_action(AISettingsPageAction::AttemptLoginGatedUpgrade);
-            });
-        } else {
-            upgrade_cta = upgrade_cta.register_default_click_handlers(|url, ctx, _| {
-                ctx.dispatch_typed_action(AISettingsPageAction::HyperlinkClick(url));
-            })
-        }
-
-        Flex::column()
-            .with_children([
-                render_separator(appearance),
-                usage_header,
-                request_usage_row,
+            usage_column.add_child(
                 Container::new(upgrade_cta.finish())
                     .with_margin_bottom(16.)
                     .finish(),
-            ])
-            .finish()
+            );
+        }
+
+        usage_column.finish()
     }
 }
 
@@ -6166,8 +6176,8 @@ impl ApiKeysWidget {
             app,
         ));
 
-        // Show upgrade CTA if BYOK is not enabled
-        if !is_byo_enabled {
+        // Show upgrade CTA if BYOK is not enabled (cloud only)
+        if !is_byo_enabled && ChannelState::is_cloud_enabled() {
             let auth_state = AuthStateProvider::as_ref(app).get();
             let upgrade_text_fragments = if let Some(team) =
                 UserWorkspaces::as_ref(app).current_team()
