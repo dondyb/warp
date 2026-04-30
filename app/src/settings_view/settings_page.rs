@@ -120,6 +120,7 @@ pub enum SettingsPageViewHandle {
     BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
+    AiProvider(ViewHandle<super::ai_provider_page::AiProviderPageView>),
 }
 
 impl SettingsPageViewHandle {
@@ -143,6 +144,7 @@ impl SettingsPageViewHandle {
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
+            AiProvider(view_handle) => ChildView::new(view_handle).finish(),
         }
     }
 }

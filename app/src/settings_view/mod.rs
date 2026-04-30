@@ -26,6 +26,7 @@ use crate::{
 };
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
+use ai_provider_page::AiProviderPageView;
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use code_page::CodeSubpage;
@@ -77,6 +78,7 @@ mod about_page;
 mod admin_actions;
 mod agent_assisted_environment_modal;
 mod ai_page;
+mod ai_provider_page;
 mod appearance_page;
 mod billing_and_usage;
 mod billing_and_usage_page;
@@ -973,6 +975,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::AiProvider(handle) => $ctx.update_view(handle, $update),
         }
     };
 }
@@ -1126,6 +1129,9 @@ impl SettingsView {
             me.handle_platform_page_event(event, ctx);
         });
 
+        // AI Provider page
+        let ai_provider_page_handle = ctx.add_view(AiProviderPageView::new);
+
         // MCP Servers page
         let mcp_servers_page_handle = ctx.add_typed_action_view(MCPServersSettingsPageView::new);
         ctx.subscribe_to_view(&mcp_servers_page_handle, |me, _, event, ctx| {
@@ -1181,6 +1187,7 @@ impl SettingsView {
             SettingsPage::new(environments_page_handle.clone()),
             SettingsPage::new(privacy_page_handle),
             SettingsPage::new(about_page_handle),
+            SettingsPage::new(ai_provider_page_handle),
         ]);
 
         // Build sidebar nav items. AI page is presented as an "Agents" umbrella
@@ -1976,6 +1983,7 @@ impl SettingsView {
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Code(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpDrive(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::AiProvider(v) => v.as_ref(app).should_render(app),
         }
     }
 
