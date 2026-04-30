@@ -1,5 +1,6 @@
 mod accessibility;
 pub mod ai;
+pub mod ai_provider;
 mod alias_expansion;
 pub mod app_icon;
 pub mod app_installation_detection;
@@ -39,6 +40,7 @@ mod schema_validation_tests;
 
 pub use accessibility::*;
 pub use ai::*;
+pub use ai_provider::*;
 pub use alias_expansion::*;
 pub use block_visibility::*;
 pub use changelog::*;

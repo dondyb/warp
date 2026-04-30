@@ -14,7 +14,9 @@ use super::{
     SettingsSection,
 };
 use crate::appearance::Appearance;
-use crate::editor::{EditorView, SingleLineEditorOptions, TextColors, TextOptions};
+use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
+use crate::settings::ai_provider::AiProviderSettings;
+use settings::Setting as _;
 use crate::view_components::{
     action_button::{ActionButton, ButtonSize, SecondaryTheme},
     dropdown::{Dropdown, DropdownItem},
@@ -102,9 +104,17 @@ impl AiProviderConfigWidget {
             ..Default::default()
         };
 
+        // Load saved values from settings.
+        let saved_endpoint = AiProviderSettings::as_ref(ctx).endpoint.value().clone();
+        let saved_model = AiProviderSettings::as_ref(ctx).model.value().clone();
+        let saved_protocol = AiProviderSettings::as_ref(ctx).protocol.value().clone();
+
         let endpoint_editor = ctx.add_typed_action_view(move |ctx| {
             let mut editor = EditorView::single_line(make_editor_options(false), ctx);
             editor.set_placeholder_text("https://api.openai.com/v1", ctx);
+            if !saved_endpoint.is_empty() {
+                editor.set_buffer_text(&saved_endpoint, ctx);
+            }
             editor
         });
 
@@ -114,13 +124,18 @@ impl AiProviderConfigWidget {
             editor
         });
 
+        let saved_model_for_editor = saved_model.clone();
         let model_editor = ctx.add_typed_action_view(move |ctx| {
             let mut editor = EditorView::single_line(make_editor_options(false), ctx);
             editor.set_placeholder_text("gpt-4o", ctx);
+            if !saved_model_for_editor.is_empty() {
+                editor.set_buffer_text(&saved_model_for_editor, ctx);
+            }
             editor
         });
 
-        let protocol_dropdown = ctx.add_typed_action_view(|ctx| {
+        let initial_protocol_index = if saved_protocol == "anthropic" { 1 } else { 0 };
+        let protocol_dropdown = ctx.add_typed_action_view(move |ctx| {
             let mut dropdown = Dropdown::new(ctx);
             let items = vec![
                 DropdownItem::new("OpenAI", AiProviderPageAction::SelectProtocol(AiProtocol::OpenAi)),
@@ -130,8 +145,28 @@ impl AiProviderConfigWidget {
                 ),
             ];
             dropdown.add_items(items, ctx);
-            dropdown.set_selected_by_index(0, ctx);
+            dropdown.set_selected_by_index(initial_protocol_index, ctx);
             dropdown
+        });
+
+        // Save endpoint on every edit.
+        ctx.subscribe_to_view(&endpoint_editor, |_me, editor_handle, event, ctx| {
+            if let EditorEvent::Edited(_) = event {
+                let text = editor_handle.as_ref(ctx).buffer_text(ctx);
+                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.endpoint.set_value(text, ctx);
+                });
+            }
+        });
+
+        // Save model on every edit.
+        ctx.subscribe_to_view(&model_editor, |_me, editor_handle, event, ctx| {
+            if let EditorEvent::Edited(_) = event {
+                let text = editor_handle.as_ref(ctx).buffer_text(ctx);
+                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.model.set_value(text, ctx);
+                });
+            }
         });
 
         let test_button = ctx.add_typed_action_view(|_| {
@@ -279,10 +314,16 @@ impl View for AiProviderPageView {
 impl TypedActionView for AiProviderPageView {
     type Action = AiProviderPageAction;
 
-    fn handle_action(&mut self, action: &Self::Action, _ctx: &mut ViewContext<Self>) {
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
-            AiProviderPageAction::SelectProtocol(_protocol) => {
-                // TODO(Task 7): persist the selected protocol.
+            AiProviderPageAction::SelectProtocol(protocol) => {
+                let protocol_str = match protocol {
+                    AiProtocol::OpenAi => "openai".to_string(),
+                    AiProtocol::Anthropic => "anthropic".to_string(),
+                };
+                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.protocol.set_value(protocol_str, ctx);
+                });
             }
             AiProviderPageAction::TestConnection => {
                 // TODO(Task 9): wire up the connection test.
