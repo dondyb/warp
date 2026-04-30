@@ -84,6 +84,7 @@ use tokio::fs;
 use voice_input::{StartListeningError, VoiceSessionResult};
 
 use warp_core::{
+    channel::ChannelState,
     context_flag::ContextFlag,
     report_if_error,
     ui::{
@@ -1851,8 +1852,9 @@ impl AgentInputFooter {
                     .map(|chip| ChildView::new(chip).finish())
             }
             AgentToolbarItemKind::ModelSelector => {
-                let show = FeatureFlag::ProfilesDesignRevamp.is_enabled()
-                    || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
+                let show = (FeatureFlag::ProfilesDesignRevamp.is_enabled()
+                    || *SessionSettings::as_ref(app).show_model_selectors_in_prompt)
+                    && ChannelState::is_cloud_enabled();
                 show.then(|| ChildView::new(&self.model_selector).finish())
             }
             AgentToolbarItemKind::NLDToggle => Some(ChildView::new(&self.nld_button).finish()),

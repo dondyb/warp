@@ -79,6 +79,7 @@ use crate::{
     workspaces::user_workspaces::UserWorkspaces,
     BlocklistAIHistoryModel,
 };
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::ui_components::segmented_control::{LabelConfig, TooltipConfig};
 
@@ -840,8 +841,9 @@ impl View for UniversalDeveloperInputButtonBar {
                 buttons = buttons.with_child(ChildView::new(&self.file_button).finish());
             }
 
-            let show_model_selector = FeatureFlag::ProfilesDesignRevamp.is_enabled()
-                || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
+            let show_model_selector = (FeatureFlag::ProfilesDesignRevamp.is_enabled()
+                || *SessionSettings::as_ref(app).show_model_selectors_in_prompt)
+                && ChannelState::is_cloud_enabled();
             if show_model_selector {
                 buttons = buttons
                     .with_child(create_divider())

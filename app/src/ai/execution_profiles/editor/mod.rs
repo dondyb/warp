@@ -26,6 +26,7 @@ use crate::{
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use itertools::Itertools;
 use regex::Regex;
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::fonts::Properties;
 use warpui::platform::Cursor;
@@ -1273,14 +1274,18 @@ impl View for ExecutionProfileEditorView {
                 appearance,
                 &self.profile_name_editor,
                 profile_data.is_default_profile,
-            ))
-            .with_child(render_models_section(appearance, self))
-            .with_child(render_permissions_section(
-                appearance,
-                self,
-                &profile_data,
-                app,
             ));
+
+        if ChannelState::is_cloud_enabled() {
+            column = column.with_child(render_models_section(appearance, self));
+        }
+
+        column = column.with_child(render_permissions_section(
+            appearance,
+            self,
+            &profile_data,
+            app,
+        ));
 
         if !profile_data.is_default_profile {
             column.add_child(ChildView::new(&self.delete_button).finish());
