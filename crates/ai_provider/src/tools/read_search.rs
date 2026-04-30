@@ -598,18 +598,14 @@ impl ToolDefinition for ReadShellCommandOutputTool {
             })?
             .to_string();
 
-        let delay = if let Some(ms) = args.get("delay_ms").and_then(|v| v.as_i64()) {
-            Some(
-                message::tool_call::read_shell_command_output::Delay::Duration(
-                    prost_types::Duration {
-                        seconds: ms / 1000,
-                        nanos: ((ms % 1000) * 1_000_000) as i32,
-                    },
-                ),
+        let delay = args.get("delay_ms").and_then(|v| v.as_i64()).map(|ms| {
+            message::tool_call::read_shell_command_output::Delay::Duration(
+                prost_types::Duration {
+                    seconds: ms / 1000,
+                    nanos: ((ms % 1000) * 1_000_000) as i32,
+                },
             )
-        } else {
-            None
-        };
+        });
 
         Ok(message::tool_call::Tool::ReadShellCommandOutput(
             message::tool_call::ReadShellCommandOutput {
@@ -716,20 +712,21 @@ impl ToolDefinition for ReadSkillTool {
             })?
             .to_string();
 
-        let skill_reference =
-            if let Some(path) = args.get("skill_path").and_then(|v| v.as_str()) {
-                Some(message::tool_call::read_skill::SkillReference::SkillPath(
-                    path.to_string(),
-                ))
-            } else if let Some(id) = args.get("bundled_skill_id").and_then(|v| v.as_str()) {
-                Some(
-                    message::tool_call::read_skill::SkillReference::BundledSkillId(
-                        id.to_string(),
-                    ),
-                )
-            } else {
-                None
-            };
+        let skill_reference = args
+            .get("skill_path")
+            .and_then(|v| v.as_str())
+            .map(|path| message::tool_call::read_skill::SkillReference::SkillPath(
+                path.to_string(),
+            ))
+            .or_else(|| {
+                args.get("bundled_skill_id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| {
+                        message::tool_call::read_skill::SkillReference::BundledSkillId(
+                            id.to_string(),
+                        )
+                    })
+            });
 
         Ok(message::tool_call::Tool::ReadSkill(
             message::tool_call::ReadSkill {

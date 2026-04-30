@@ -100,7 +100,7 @@ impl OpenAiConfig {
 
 use std::collections::HashMap;
 use serde_json::json;
-use warp_multi_agent_api::{Request, request as req};
+use warp_multi_agent_api::Request;
 
 /// Accumulator for streaming OpenAI tool calls. OpenAI sends each
 /// `tool_calls[i]` field across multiple SSE chunks (e.g., `name` in
@@ -246,30 +246,6 @@ const SYSTEM_PROMPT: &str = "You are a helpful AI assistant integrated into a \
     terminal application. Respond clearly and concisely. Do not invoke tools \
     or external commands — just provide a textual answer.";
 
-/// Extract the user's most recent query from a Warp `Request`.
-/// Looks at `Input::user_inputs.user_query` (the current path) and the
-/// deprecated `Input::user_query`. Returns `None` if no UserQuery is found,
-/// which can happen in tool-result-only continuations.
-///
-/// Used in tests; the main path now goes through `build_messages_from_request`.
-pub(crate) fn extract_user_query(request: &Request) -> Option<String> {
-    let input = request.input.as_ref()?;
-    use warp_multi_agent_api::request::input;
-    let input_type = input.r#type.as_ref()?;
-    match input_type {
-        input::Type::UserInputs(user_inputs) => {
-            user_inputs.inputs.iter().rev().find_map(|ui| match ui.input.as_ref() {
-                Some(input::user_inputs::user_input::Input::UserQuery(uq)) => {
-                    Some(uq.query.clone())
-                }
-                _ => None,
-            })
-        }
-        #[allow(deprecated)]
-        input::Type::UserQuery(uq) => Some(uq.query.clone()),
-        _ => None,
-    }
-}
 
 /// Walk `request.task_context.tasks[*].messages[*]` to reconstruct the
 /// conversation history as OpenAI-shaped messages (role: user, role: assistant,
@@ -324,7 +300,7 @@ fn build_messages_from_request(
                             }
                         }
                     }
-                    Some(message::Message::ToolCallResult(_)) | _ => {
+                    _ => {
                         // ToolCallResult in history is not re-emitted here because the
                         // corresponding role:tool message was already produced in a
                         // prior request's input processing. Other variants (ServerEvent,
@@ -596,10 +572,7 @@ fn build_tool_call_action(
     let tool_variant = if let Some(tool_def) = tool_def {
         let args_value = serde_json::from_str::<serde_json::Value>(&accumulated.arguments)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
-        match tool_def.decode_call_args(args_value) {
-            Ok(t) => Some(t),
-            Err(_) => None,
-        }
+        tool_def.decode_call_args(args_value).ok()
     } else {
         None
     };
@@ -933,19 +906,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn extracts_user_query_from_user_inputs() {
-        let req = build_request_with_query("hello world");
-        let q = extract_user_query(&req);
-        assert_eq!(q, Some("hello world".to_string()));
-    }
-
-    #[test]
-    fn extract_returns_none_when_input_missing() {
-        let req = Request::default();
-        let q = extract_user_query(&req);
-        assert_eq!(q, None);
-    }
 
     #[test]
     fn build_request_body_has_messages_array() {
