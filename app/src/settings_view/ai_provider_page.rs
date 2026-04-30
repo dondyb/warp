@@ -276,7 +276,7 @@ impl SettingsWidget for AiProviderConfigWidget {
             let input = appearance
                 .ui_builder()
                 .text_input(editor.clone())
-                .with_style(editor_style.clone())
+                .with_style(editor_style)
                 .build()
                 .finish();
 
@@ -320,14 +320,14 @@ impl SettingsWidget for AiProviderConfigWidget {
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
-            .with_color(theme.ui_green_color().into())
+            .with_color(theme.ui_green_color())
             .finish(),
             TestStatus::Failure(msg) => Text::new_inline(
                 format!("\u{2717} {msg}"),
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
-            .with_color(theme.ui_error_color().into())
+            .with_color(theme.ui_error_color())
             .finish(),
         };
 

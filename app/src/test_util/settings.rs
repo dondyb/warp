@@ -18,13 +18,13 @@ pub fn initialize_settings_for_tests_with_mode(
         drive::settings::WarpDriveSettings,
         search::command_search::settings::CommandSearchSettings,
         settings::{
-            app_icon::AppIconSettings, init_and_register_user_preferences,
-            manager::SettingsManager, AISettings, AccessibilitySettings, AliasExpansionSettings,
-            AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-            CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-            FontSettings, GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings,
-            PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-            SshSettings, ThemeSettings, VimBannerSettings,
+            ai_provider::AiProviderSettings, app_icon::AppIconSettings,
+            init_and_register_user_preferences, manager::SettingsManager, AISettings,
+            AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
+            BlockVisibilitySettings, ChangelogSettings, CloudPreferencesSettings, CodeSettings,
+            DebugSettings, EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings,
+            InputSettings, NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings,
+            ScrollSettings, SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
         },
         terminal::{
             general_settings::GeneralSettings, keys_settings::KeysSettings,
@@ -47,6 +47,7 @@ pub fn initialize_settings_for_tests_with_mode(
 
     AccessibilitySettings::register(app);
     app.update(AISettings::register_and_subscribe_to_events);
+    AiProviderSettings::register(app);
     AliasExpansionSettings::register(app);
     CloudAgentSettings::register(app);
     AppEditorSettings::register(app);
