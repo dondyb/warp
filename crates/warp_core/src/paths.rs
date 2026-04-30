@@ -164,6 +164,14 @@ pub fn secure_state_dir() -> Option<PathBuf> {
         return None;
     }
 
+    // OSS builds aren't entitled for the App Group container; calling
+    // `containerURLForSecurityApplicationGroupIdentifier` and probing the
+    // returned path triggers a macOS TCC "access data from other apps"
+    // prompt every rebuild. Skip it and fall back to `state_dir()`.
+    if ChannelState::channel() == Channel::Oss {
+        return None;
+    }
+
     #[cfg(target_os = "macos")]
     if let Some(app_group_root) = app_group_container_path() {
         // The macOS project_path is the bundle ID (i.e. `dev.warp.Warp-Stable`).

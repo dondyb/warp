@@ -32,7 +32,7 @@ use crate::{
 use warp_core::semantic_selection::SemanticSelection;
 
 use super::{
-    ai_provider::AiProviderSettings,
+    ai_provider::{AiProviderSettings, sync_ai_provider_runtime_config},
     app_icon::AppIconSettings,
     app_installation_detection::UserAppInstallDetectionSettings,
     cloud_preferences::CloudPreferencesSettings,
@@ -129,6 +129,11 @@ pub fn init(
     if needs_settings_file_migration(ctx) {
         migrate_native_settings_to_settings_file(ctx);
     }
+
+    sync_ai_provider_runtime_config(ctx);
+    ctx.subscribe_to_model(&AiProviderSettings::handle(ctx), |_, _, ctx| {
+        sync_ai_provider_runtime_config(ctx);
+    });
 
     let use_thin_strokes = *FontSettings::as_ref(ctx).use_thin_strokes;
 

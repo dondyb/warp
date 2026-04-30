@@ -1,7 +1,8 @@
 //! Settings for the custom AI Provider — endpoint URL, model, protocol.
 //! All values including the API key are stored in TOML (single-user OSS dev fork; the file is mode 0600).
 
-use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
+use settings::{Setting as _, SupportedPlatforms, SyncToCloud, macros::define_settings_group};
+use warpui::{AppContext, SingletonEntity};
 
 define_settings_group!(AiProviderSettings, settings: [
     endpoint: AiProviderEndpoint {
@@ -45,3 +46,16 @@ define_settings_group!(AiProviderSettings, settings: [
         description: "API key for the custom AI provider. Stored in TOML under user-only file mode.",
     },
 ]);
+
+/// Push the persisted AI Provider settings into the process-wide runtime
+/// config used by OSS AI dispatch. This must run at startup, not only when
+/// the Settings page is opened, so `/agent` works immediately after relaunch.
+pub fn sync_ai_provider_runtime_config(ctx: &AppContext) {
+    let settings = AiProviderSettings::as_ref(ctx);
+    let endpoint = settings.endpoint.value().to_string();
+    let model = settings.model.value().to_string();
+    let api_key = settings.api_key.value().to_string();
+
+    let config = ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model).ok();
+    ai_provider::set_runtime_config(config);
+}

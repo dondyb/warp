@@ -4,43 +4,32 @@
 //! all live here.
 
 use super::{
-    settings_page::{
-        build_sub_header, render_separator, MatchData, PageType, SettingsPageEvent,
-        SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, CONTENT_FONT_SIZE,
-        HEADER_PADDING,
-    },
     SettingsSection,
+    settings_page::{
+        CONTENT_FONT_SIZE, HEADER_PADDING, MatchData, PageType, SettingsPageEvent,
+        SettingsPageMeta, SettingsPageViewHandle, SettingsWidget, build_sub_header,
+        render_separator,
+    },
 };
 use crate::appearance::Appearance;
-use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions};
-use crate::settings::ai_provider::AiProviderSettings;
-use settings::Setting as _;
+use crate::editor::{
+    EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
+};
+use crate::settings::ai_provider::{AiProviderSettings, sync_ai_provider_runtime_config};
 use crate::view_components::{
     action_button::{ActionButton, ButtonSize, SecondaryTheme},
     dropdown::{Dropdown, DropdownItem},
 };
+use settings::Setting as _;
+use warpui::r#async::SpawnedFutureHandle;
 use warpui::{
+    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
     elements::{
         ChildView, Container, CrossAxisAlignment, Element, Expanded, Flex, MainAxisAlignment,
         MainAxisSize, ParentElement, Text,
     },
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
-use warpui::r#async::SpawnedFutureHandle;
-
-/// Read the current settings and push them into the process-wide
-/// `ai_provider::RUNTIME_CONFIG` singleton so the dispatcher picks up
-/// GUI-configured values without requiring env vars.
-fn push_runtime_config_from_settings(ctx: &warpui::AppContext) {
-    let settings = AiProviderSettings::as_ref(ctx);
-    let endpoint = settings.endpoint.value().to_string();
-    let model = settings.model.value().to_string();
-    let api_key = settings.api_key.value().to_string();
-
-    let cfg = ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model).ok();
-    ai_provider::set_runtime_config(cfg);
-}
 
 // ── Page action ──────────────────────────────────────────────────────────────
 
@@ -160,7 +149,10 @@ impl AiProviderConfigWidget {
         let protocol_dropdown = ctx.add_typed_action_view(move |ctx| {
             let mut dropdown = Dropdown::new(ctx);
             let items = vec![
-                DropdownItem::new("OpenAI", AiProviderPageAction::SelectProtocol(AiProtocol::OpenAi)),
+                DropdownItem::new(
+                    "OpenAI",
+                    AiProviderPageAction::SelectProtocol(AiProtocol::OpenAi),
+                ),
                 DropdownItem::new(
                     "Anthropic",
                     AiProviderPageAction::SelectProtocol(AiProtocol::Anthropic),
@@ -178,7 +170,7 @@ impl AiProviderConfigWidget {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.endpoint.set_value(text, ctx);
                 });
-                push_runtime_config_from_settings(ctx);
+                sync_ai_provider_runtime_config(ctx);
             }
         });
 
@@ -189,7 +181,7 @@ impl AiProviderConfigWidget {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.api_key.set_value(text, ctx);
                 });
-                push_runtime_config_from_settings(ctx);
+                sync_ai_provider_runtime_config(ctx);
             }
         });
 
@@ -203,7 +195,7 @@ impl AiProviderConfigWidget {
 
         // Prime the runtime config from saved settings so the dispatcher
         // picks up GUI values even before the user edits anything this session.
-        push_runtime_config_from_settings(ctx);
+        sync_ai_provider_runtime_config(ctx);
 
         Self {
             endpoint_editor,
@@ -426,14 +418,14 @@ impl TypedActionView for AiProviderPageView {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.protocol.set_value(protocol_str, ctx);
                 });
-                push_runtime_config_from_settings(ctx);
+                sync_ai_provider_runtime_config(ctx);
             }
             AiProviderPageAction::SelectModel(model) => {
                 let model = model.clone();
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.model.set_value(model, ctx);
                 });
-                push_runtime_config_from_settings(ctx);
+                sync_ai_provider_runtime_config(ctx);
             }
             AiProviderPageAction::Connect => {
                 log::info!("[ai_provider_page] Connect clicked. Fetching /v1/models.");
@@ -441,8 +433,7 @@ impl TypedActionView for AiProviderPageView {
                 let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
 
                 if api_key.trim().is_empty() {
-                    self.test_status =
-                        TestStatus::Failure("API key is required".to_string());
+                    self.test_status = TestStatus::Failure("API key is required".to_string());
                     ctx.notify();
                     return;
                 }
@@ -452,8 +443,7 @@ impl TypedActionView for AiProviderPageView {
 
                 self._test_future = None;
 
-                let saved_model =
-                    AiProviderSettings::as_ref(ctx).model.value().clone();
+                let saved_model = AiProviderSettings::as_ref(ctx).model.value().clone();
                 let model_dropdown_handle = self.model_dropdown.clone();
 
                 use warpui::r#async::FutureExt as _;
@@ -488,13 +478,10 @@ impl TypedActionView for AiProviderPageView {
                                 if saved_model.is_empty() {
                                     if let Some(first) = models.first() {
                                         let first = first.clone();
-                                        AiProviderSettings::handle(ctx).update(
-                                            ctx,
-                                            |s, ctx| {
-                                                let _ = s.model.set_value(first, ctx);
-                                            },
-                                        );
-                                        push_runtime_config_from_settings(ctx);
+                                        AiProviderSettings::handle(ctx).update(ctx, |s, ctx| {
+                                            let _ = s.model.set_value(first, ctx);
+                                        });
+                                        sync_ai_provider_runtime_config(ctx);
                                     }
                                 }
                                 me.test_status = TestStatus::Success(count);
