@@ -25,6 +25,7 @@ use warpui::{
 use settings::{
     define_settings_group, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
+use warp_core::channel::ChannelState;
 use warp_core::execution_mode::AppExecutionMode;
 use warp_core::features::FeatureFlag;
 
@@ -747,7 +748,7 @@ define_settings_group!(AISettings, settings: [
     // This is only used when `FeatureFlag::AgentView` is enabled.
     nld_in_terminal_enabled_internal: NLDInTerminalEnabled {
         type: bool,
-        default: false,
+        default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
@@ -1349,7 +1350,7 @@ define_settings_group!(AISettings, settings: [
     // This setting is only used when the AI autonomy setting is AlwaysAsk or not set.
     cloud_agent_computer_use_enabled: CloudAgentComputerUseEnabled {
         type: bool,
-        default: warp_core::channel::ChannelState::channel().is_dogfood(),
+        default: ChannelState::channel().is_dogfood(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
@@ -1497,7 +1498,12 @@ impl AISettings {
     }
 
     pub fn is_any_ai_enabled(&self, app: &AppContext) -> bool {
-        // Disable AI for anonymous and logged-out users.
+        // OSS fork: AI is provided via the user's custom endpoint
+        // (configured in Settings → AI Provider). No warp.dev login required.
+        if !ChannelState::is_cloud_enabled() {
+            return *self.is_any_ai_enabled;
+        }
+        // Cloud mode (warp.dev): require login for AI features.
         let is_anonymous_or_logged_out = AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out();

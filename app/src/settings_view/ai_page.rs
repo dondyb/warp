@@ -3119,8 +3119,8 @@ impl SettingsWidget for GlobalAIWidget {
             );
         }
 
-        // Show sign-up button for anonymous users, toggle for logged-in users
-        if is_anonymous {
+        // Show sign-up button for anonymous users only in cloud-enabled builds
+        if is_anonymous && ChannelState::is_cloud_enabled() {
             row.add_child(
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)

@@ -1200,7 +1200,11 @@ impl SettingsView {
         nav_items.push(SettingsNavItem::Page(SettingsSection::AiProvider));
         nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
             "Agents",
-            SettingsSection::ai_subpages().to_vec(),
+            SettingsSection::ai_subpages()
+                .iter()
+                .copied()
+                .filter(|&s| cloud || s != SettingsSection::WarpAgent)
+                .collect(),
         )));
         if cloud {
             nav_items.push(SettingsNavItem::Page(SettingsSection::BillingAndUsage));
@@ -1212,13 +1216,15 @@ impl SettingsView {
                 SettingsSection::EditorAndCodeReview,
             ],
         )));
-        nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
-            "Cloud platform",
-            vec![
-                SettingsSection::CloudEnvironments,
-                SettingsSection::OzCloudAPIKeys,
-            ],
-        )));
+        if cloud {
+            nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
+                "Cloud platform",
+                vec![
+                    SettingsSection::CloudEnvironments,
+                    SettingsSection::OzCloudAPIKeys,
+                ],
+            )));
+        }
         if cloud {
             nav_items.push(SettingsNavItem::Page(SettingsSection::Teams));
         }
