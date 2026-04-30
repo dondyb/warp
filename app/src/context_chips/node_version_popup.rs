@@ -495,16 +495,6 @@ fn detect_nvm_installed() -> bool {
             if fish_nvm.is_file() {
                 return true;
             }
-            // macOS possible alt path for fish conf sometimes under Library
-            let fish_alt = home
-                .join("Library")
-                .join("Application Support")
-                .join("fish")
-                .join("functions")
-                .join("nvm.fish");
-            if fish_alt.is_file() {
-                return true;
-            }
         }
 
         // If an `nvm` shim exists on PATH (rare on unix because it's a function), still check
