@@ -369,6 +369,11 @@ impl SettingsWidget for AiProviderConfigWidget {
 
 pub struct AiProviderPageView {
     page: PageType<Self>,
+    /// Cloned handles to the live editor views so `handle_action` can read
+    /// their current buffer text without going through saved settings.
+    endpoint_editor: ViewHandle<EditorView>,
+    api_key_editor: ViewHandle<EditorView>,
+    model_editor: ViewHandle<EditorView>,
     /// Current state of the "Test connection" operation.
     pub(crate) test_status: TestStatus,
     /// Handle to the in-flight test future, kept so it can be aborted
@@ -378,8 +383,16 @@ pub struct AiProviderPageView {
 
 impl AiProviderPageView {
     pub fn new(ctx: &mut ViewContext<AiProviderPageView>) -> Self {
+        let widget = AiProviderConfigWidget::new(ctx);
+        // Clone handles before the widget is moved into the page.
+        let endpoint_editor = widget.endpoint_editor.clone();
+        let api_key_editor = widget.api_key_editor.clone();
+        let model_editor = widget.model_editor.clone();
         AiProviderPageView {
-            page: PageType::new_monolith(AiProviderConfigWidget::new(ctx), None, false),
+            page: PageType::new_monolith(widget, None, false),
+            endpoint_editor,
+            api_key_editor,
+            model_editor,
             test_status: TestStatus::Idle,
             _test_future: None,
         }
@@ -416,10 +429,16 @@ impl TypedActionView for AiProviderPageView {
                 push_runtime_config_from_settings(ctx);
             }
             AiProviderPageAction::TestConnection => {
-                // Read current saved values from settings + secure storage.
-                let endpoint = AiProviderSettings::as_ref(ctx).endpoint.value().clone();
-                let model = AiProviderSettings::as_ref(ctx).model.value().clone();
-                let api_key = load_byo_api_key(ctx).unwrap_or_default();
+                log::info!(
+                    "[ai_provider_page] Test connection clicked. \
+                     Reading endpoint/model/api_key from live editors."
+                );
+                // Read from the LIVE editor buffers so we always test what
+                // the user has typed RIGHT NOW, even if save-on-edit hasn't
+                // fired yet.
+                let endpoint = self.endpoint_editor.as_ref(ctx).buffer_text(ctx);
+                let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
+                let model = self.model_editor.as_ref(ctx).buffer_text(ctx);
 
                 // Validate with from_parts before kicking off the async task.
                 let config = match ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model) {
@@ -444,20 +463,58 @@ impl TypedActionView for AiProviderPageView {
                 let handle = ctx.spawn(
                     async move {
                         let adapter = ai_provider::OpenAiAdapter::new(config);
+                        log::info!(
+                            "[ai_provider_page] Test connection: opening stream to endpoint"
+                        );
                         use ai_provider::AiProvider as _;
-                        let result = adapter
+                        use futures::StreamExt as _;
+                        let outcome = adapter
                             .chat_stream(&request)
                             .with_timeout(std::time::Duration::from_secs(10))
                             .await;
-                        match result {
-                            Ok(Ok(_stream)) => Ok(()),
+                        match outcome {
+                            Ok(Ok(mut stream)) => {
+                                // Consume up to a few events. If the first non-StreamInit
+                                // event is an Error, surface that. If we get past the
+                                // opening events without an error, treat the connection
+                                // as healthy.
+                                let mut events_seen = 0;
+                                loop {
+                                    let next = stream
+                                        .next()
+                                        .with_timeout(std::time::Duration::from_secs(10))
+                                        .await;
+                                    match next {
+                                        Ok(Some(Ok(_event))) => {
+                                            events_seen += 1;
+                                            // Any 3 events without an error → success.
+                                            // The first is StreamInit (synthesized), the
+                                            // next two are the opening ClientActions.
+                                            if events_seen >= 3 {
+                                                break Ok(());
+                                            }
+                                        }
+                                        Ok(Some(Err(e))) => break Err(format!("{e:#}")),
+                                        Ok(None) => break Err(
+                                            "Endpoint closed connection without responding"
+                                                .into(),
+                                        ),
+                                        Err(_timeout) => break Err("Connection timed out".into()),
+                                    }
+                                }
+                            }
                             Ok(Err(e)) => Err(format!("{e:#}")),
                             Err(_timeout) => Err("Connection timed out".to_string()),
                         }
                     },
                     |me, result, ctx| {
                         me.test_status = match result {
-                            Ok(()) => TestStatus::Success,
+                            Ok(()) => {
+                                // Push the just-validated values into the runtime config
+                                // so the dispatcher uses them immediately.
+                                push_runtime_config_from_settings(ctx);
+                                TestStatus::Success
+                            }
                             Err(msg) => TestStatus::Failure(msg),
                         };
                         me._test_future = None;

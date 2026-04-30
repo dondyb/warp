@@ -895,6 +895,9 @@ impl ServerApi {
         // which fails on `get_or_refresh_access_token` for users who
         // haven't logged in to warp.dev (which is everyone in OSS).
         if !ChannelState::is_cloud_enabled() {
+            log::info!(
+                "[server_api] OSS dispatch: looking up AI Provider config for chat_stream"
+            );
             let config = ai_provider::runtime_config()
                 .map(Ok)
                 .unwrap_or_else(ai_provider::OpenAiConfig::from_env)
@@ -904,6 +907,10 @@ impl ServerApi {
                          and enter your endpoint, API key, and model."
                     )))
                 })?;
+            log::info!(
+                "[server_api] OSS dispatch: have config (endpoint={:?}, model={:?}), invoking OpenAiAdapter",
+                config.endpoint, config.model
+            );
             let adapter = ai_provider::OpenAiAdapter::new(config);
             return ai_provider::AiProvider::chat_stream(&adapter, request).await;
         }
