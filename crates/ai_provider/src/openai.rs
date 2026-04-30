@@ -8,9 +8,26 @@
 //!
 //! M1b-chat: text-only chat (no tool calls). Tools land in M1c.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::AIApiError;
+
+/// Process-wide override for the active OpenAI config. Set by the
+/// Settings UI when the user saves their config; read by the dispatcher
+/// in `generate_multi_agent_output`. Falls back to `OpenAiConfig::from_env()`
+/// if `None`.
+static RUNTIME_CONFIG: RwLock<Option<OpenAiConfig>> = RwLock::new(None);
+
+/// Set the process-wide runtime config. Called from the Settings UI
+/// whenever the user updates their configuration.
+pub fn set_runtime_config(config: Option<OpenAiConfig>) {
+    *RUNTIME_CONFIG.write().expect("RUNTIME_CONFIG poisoned") = config;
+}
+
+/// Read the process-wide runtime config, if set.
+pub fn runtime_config() -> Option<OpenAiConfig> {
+    RUNTIME_CONFIG.read().expect("RUNTIME_CONFIG poisoned").clone()
+}
 
 /// OpenAI provider configuration loaded from environment variables.
 #[derive(Debug, Clone)]

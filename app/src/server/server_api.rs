@@ -897,7 +897,10 @@ impl ServerApi {
                 ai_provider::AiProvider::chat_stream(&adapter, request).await
             }
             Protocol::OpenAi => {
-                let adapter = ai_provider::OpenAiAdapter::from_env()?;
+                let config = ai_provider::runtime_config()
+                    .map(Ok)
+                    .unwrap_or_else(ai_provider::OpenAiConfig::from_env)?;
+                let adapter = ai_provider::OpenAiAdapter::new(config);
                 ai_provider::AiProvider::chat_stream(&adapter, request).await
             }
             Protocol::Anthropic => Err(Arc::new(AIApiError::Other(anyhow!(

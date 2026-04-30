@@ -18,7 +18,7 @@ pub use client::{AiProvider, ResponseEventStream};
 pub use error::{
     AIApiError, DeserializationError, WARP_ERROR_CODE_HEADER, WARP_ERROR_CODE_OUT_OF_CREDITS,
 };
-pub use openai::{OpenAiAdapter, OpenAiConfig};
+pub use openai::{OpenAiAdapter, OpenAiConfig, set_runtime_config, runtime_config};
 
 /// Selected backend for AI requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

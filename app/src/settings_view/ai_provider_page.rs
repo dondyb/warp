@@ -47,6 +47,22 @@ fn save_byo_api_key(ctx: &warpui::AppContext, key: &str) {
     }
 }
 
+/// Read the current settings + secure storage and push them into the
+/// process-wide `ai_provider::RUNTIME_CONFIG` singleton so that the
+/// dispatcher picks up GUI-configured values without requiring env vars.
+fn push_runtime_config_from_settings(ctx: &warpui::AppContext) {
+    let settings = AiProviderSettings::as_ref(ctx);
+    let endpoint = settings.endpoint.value().to_string();
+    let model = settings.model.value().to_string();
+    let api_key = ctx
+        .secure_storage()
+        .read_value(API_KEY_STORAGE_KEY)
+        .unwrap_or_default();
+
+    let cfg = ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model).ok();
+    ai_provider::set_runtime_config(cfg);
+}
+
 // ── Page action ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
@@ -174,6 +190,7 @@ impl AiProviderConfigWidget {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.endpoint.set_value(text, ctx);
                 });
+                push_runtime_config_from_settings(ctx);
             }
         });
 
@@ -184,6 +201,7 @@ impl AiProviderConfigWidget {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.model.set_value(text, ctx);
                 });
+                push_runtime_config_from_settings(ctx);
             }
         });
 
@@ -192,6 +210,7 @@ impl AiProviderConfigWidget {
             if let EditorEvent::Edited(_) = event {
                 let text = editor_handle.as_ref(ctx).buffer_text(ctx);
                 save_byo_api_key(ctx, &text);
+                push_runtime_config_from_settings(ctx);
             }
         });
 
@@ -202,6 +221,10 @@ impl AiProviderConfigWidget {
                     ctx.dispatch_typed_action(AiProviderPageAction::TestConnection);
                 })
         });
+
+        // Prime the runtime config from saved settings so the dispatcher
+        // picks up GUI values even before the user edits anything this session.
+        push_runtime_config_from_settings(ctx);
 
         Self {
             endpoint_editor,
@@ -390,6 +413,7 @@ impl TypedActionView for AiProviderPageView {
                 AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let _ = settings.protocol.set_value(protocol_str, ctx);
                 });
+                push_runtime_config_from_settings(ctx);
             }
             AiProviderPageAction::TestConnection => {
                 // Read current saved values from settings + secure storage.
