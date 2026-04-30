@@ -1054,4 +1054,66 @@ mod tests {
         assert!(uuid::Uuid::parse_str(&ids.task_id).is_ok());
         assert!(!StreamIds::is_continuation(&request));
     }
+
+    // --- Task 10: parallel tool calls ---
+
+    #[test]
+    fn accumulator_handles_two_parallel_tool_calls() {
+        let mut acc = ToolCallAccumulator::default();
+        acc.ingest_chunk(&serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [
+                        { "index": 0, "id": "call_a", "function": { "name": "run_shell_command", "arguments": "{\"command\":\"ls\"}" } },
+                        { "index": 1, "id": "call_b", "function": { "name": "grep", "arguments": "{\"queries\":[\"main\"],\"path\":\".\"}" } }
+                    ]
+                }
+            }]
+        }));
+        let drained = acc.drain_completed();
+        assert_eq!(drained.len(), 2);
+    }
+
+    // --- Task 11: tool call error handling ---
+
+    #[test]
+    fn unknown_tool_name_emits_message_without_tool_variant() {
+        let acc = AccumulatedToolCall {
+            id: "call_x".into(),
+            name: "made_up_tool".into(),
+            arguments: "{}".into(),
+        };
+        let action = build_tool_call_action("task-1", &acc);
+        match action.action.as_ref().unwrap() {
+            client_action::Action::AddMessagesToTask(a) => {
+                assert_eq!(a.messages.len(), 1);
+                let msg = &a.messages[0];
+                if let Some(message::Message::ToolCall(tc)) = msg.message.as_ref() {
+                    assert!(tc.tool.is_none(), "unknown tool should produce tool=None");
+                } else {
+                    panic!("expected ToolCall message variant");
+                }
+            }
+            _ => panic!("expected AddMessagesToTask"),
+        }
+    }
+
+    #[test]
+    fn malformed_args_falls_back_to_empty_object() {
+        let acc = AccumulatedToolCall {
+            id: "call_x".into(),
+            name: "run_shell_command".into(),
+            arguments: "{not valid json".into(),
+        };
+        let action = build_tool_call_action("task-1", &acc);
+        match action.action.as_ref().unwrap() {
+            client_action::Action::AddMessagesToTask(a) => {
+                let msg = &a.messages[0];
+                if let Some(message::Message::ToolCall(tc)) = msg.message.as_ref() {
+                    assert!(tc.tool.is_none(), "malformed args should produce tool=None");
+                }
+            }
+            _ => panic!("expected AddMessagesToTask"),
+        }
+    }
 }
