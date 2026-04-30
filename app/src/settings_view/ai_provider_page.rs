@@ -29,6 +29,7 @@ use warpui::{
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
+use warpui::r#async::SpawnedFutureHandle;
 use warpui_extras::secure_storage::AppContextExt as _;
 
 /// Secure-storage key for the user's BYO LLM API key. Distinct from
@@ -73,11 +74,10 @@ impl std::fmt::Display for AiProtocol {
     }
 }
 
-// ── Test-connection status (local state only for now) ─────────────────────────
+// ── Test-connection status ────────────────────────────────────────────────────
 
 #[derive(Clone, Default)]
-#[allow(dead_code)]
-enum TestStatus {
+pub(crate) enum TestStatus {
     #[default]
     Idle,
     InProgress,
@@ -93,8 +93,6 @@ struct AiProviderConfigWidget {
     model_editor: ViewHandle<EditorView>,
     protocol_dropdown: ViewHandle<Dropdown<AiProviderPageAction>>,
     test_button: ViewHandle<ActionButton>,
-    #[allow(dead_code)]
-    test_status: TestStatus,
 }
 
 impl AiProviderConfigWidget {
@@ -211,7 +209,6 @@ impl AiProviderConfigWidget {
             model_editor,
             protocol_dropdown,
             test_button,
-            test_status: TestStatus::Idle,
         }
     }
 }
@@ -225,7 +222,7 @@ impl SettingsWidget for AiProviderConfigWidget {
 
     fn render(
         &self,
-        _view: &AiProviderPageView,
+        view: &AiProviderPageView,
         appearance: &Appearance,
         _app: &AppContext,
     ) -> Box<dyn Element> {
@@ -284,6 +281,40 @@ impl SettingsWidget for AiProviderConfigWidget {
             .with_child(ChildView::new(&self.protocol_dropdown).finish())
             .finish();
 
+        // Test button row with status text.
+        let test_button_el = ChildView::new(&self.test_button).finish();
+        let test_status_el: Box<dyn Element> = match &view.test_status {
+            TestStatus::Idle => warpui::elements::Empty::new().finish(),
+            TestStatus::InProgress => Text::new_inline(
+                "Testing\u{2026}".to_string(),
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(theme.disabled_ui_text_color().into())
+            .finish(),
+            TestStatus::Success => Text::new_inline(
+                "\u{2713} Connection OK".to_string(),
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(theme.ui_green_color().into())
+            .finish(),
+            TestStatus::Failure(msg) => Text::new_inline(
+                format!("\u{2717} {msg}"),
+                appearance.ui_font_family(),
+                CONTENT_FONT_SIZE,
+            )
+            .with_color(theme.ui_error_color().into())
+            .finish(),
+        };
+
+        let test_row = Flex::row()
+            .with_spacing(12.)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(test_button_el)
+            .with_child(test_status_el)
+            .finish();
+
         // Assemble form.
         let column = Flex::column()
             .with_spacing(16.)
@@ -302,7 +333,7 @@ impl SettingsWidget for AiProviderConfigWidget {
                     .with_padding_bottom(4.)
                     .finish(),
             )
-            .with_child(ChildView::new(&self.test_button).finish())
+            .with_child(test_row)
             .finish();
 
         Container::new(column)
@@ -315,12 +346,19 @@ impl SettingsWidget for AiProviderConfigWidget {
 
 pub struct AiProviderPageView {
     page: PageType<Self>,
+    /// Current state of the "Test connection" operation.
+    pub(crate) test_status: TestStatus,
+    /// Handle to the in-flight test future, kept so it can be aborted
+    /// if the user clicks Test again before the previous one finishes.
+    _test_future: Option<SpawnedFutureHandle>,
 }
 
 impl AiProviderPageView {
     pub fn new(ctx: &mut ViewContext<AiProviderPageView>) -> Self {
         AiProviderPageView {
             page: PageType::new_monolith(AiProviderConfigWidget::new(ctx), None, false),
+            test_status: TestStatus::Idle,
+            _test_future: None,
         }
     }
 }
@@ -354,9 +392,80 @@ impl TypedActionView for AiProviderPageView {
                 });
             }
             AiProviderPageAction::TestConnection => {
-                // TODO(Task 9): wire up the connection test.
+                // Read current saved values from settings + secure storage.
+                let endpoint = AiProviderSettings::as_ref(ctx).endpoint.value().clone();
+                let model = AiProviderSettings::as_ref(ctx).model.value().clone();
+                let api_key = load_byo_api_key(ctx).unwrap_or_default();
+
+                // Validate with from_parts before kicking off the async task.
+                let config = match ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        self.test_status = TestStatus::Failure(format!("{e:#}"));
+                        ctx.notify();
+                        return;
+                    }
+                };
+
+                self.test_status = TestStatus::InProgress;
+                ctx.notify();
+
+                // Build a minimal "ping" request.
+                let request = build_ping_request();
+
+                // Abort any in-flight test.
+                self._test_future = None;
+
+                use warpui::r#async::FutureExt as _;
+                let handle = ctx.spawn(
+                    async move {
+                        let adapter = ai_provider::OpenAiAdapter::new(config);
+                        use ai_provider::AiProvider as _;
+                        let result = adapter
+                            .chat_stream(&request)
+                            .with_timeout(std::time::Duration::from_secs(10))
+                            .await;
+                        match result {
+                            Ok(Ok(_stream)) => Ok(()),
+                            Ok(Err(e)) => Err(format!("{e:#}")),
+                            Err(_timeout) => Err("Connection timed out".to_string()),
+                        }
+                    },
+                    |me, result, ctx| {
+                        me.test_status = match result {
+                            Ok(()) => TestStatus::Success,
+                            Err(msg) => TestStatus::Failure(msg),
+                        };
+                        me._test_future = None;
+                        ctx.notify();
+                    },
+                );
+                self._test_future = Some(handle);
             }
         }
+    }
+}
+
+/// Build a minimal one-shot "ping" request to test that the endpoint responds.
+fn build_ping_request() -> warp_multi_agent_api::Request {
+    use warp_multi_agent_api::request as req;
+    warp_multi_agent_api::Request {
+        input: Some(req::Input {
+            r#type: Some(req::input::Type::UserInputs(req::input::UserInputs {
+                inputs: vec![req::input::user_inputs::UserInput {
+                    input: Some(
+                        req::input::user_inputs::user_input::Input::UserQuery(
+                            req::input::UserQuery {
+                                query: "ping".to_string(),
+                                ..Default::default()
+                            },
+                        ),
+                    ),
+                }],
+            })),
+            ..Default::default()
+        }),
+        ..Default::default()
     }
 }
 

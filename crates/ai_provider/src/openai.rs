@@ -29,6 +29,34 @@ impl OpenAiConfig {
     /// Default endpoint when `WARP_AI_OPENAI_ENDPOINT` is unset.
     pub const DEFAULT_ENDPOINT: &'static str = "https://api.openai.com/v1";
 
+    /// Construct an `OpenAiConfig` from explicit values. Used when the
+    /// values come from settings storage instead of env vars. Returns
+    /// `Err` if `api_key` or `model` is empty (analogous to `from_env`'s
+    /// missing-required-vars handling). An empty `endpoint` falls back
+    /// to `DEFAULT_ENDPOINT`.
+    pub fn from_parts(
+        endpoint: String,
+        api_key: String,
+        model: String,
+    ) -> std::result::Result<Self, Arc<AIApiError>> {
+        if api_key.trim().is_empty() {
+            return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                "AI Provider API key is required"
+            ))));
+        }
+        if model.trim().is_empty() {
+            return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+                "AI Provider model is required"
+            ))));
+        }
+        let endpoint = if endpoint.trim().is_empty() {
+            Self::DEFAULT_ENDPOINT.to_string()
+        } else {
+            endpoint
+        };
+        Ok(Self { endpoint, api_key, model })
+    }
+
     /// Build an `OpenAiConfig` from environment variables. Returns `Err` if
     /// the API key or model is missing — without those, the adapter cannot
     /// authenticate or know which model to call.
@@ -517,6 +545,41 @@ mod tests {
                 assert!(format!("{err:#}").contains("WARP_AI_OPENAI_MODEL"));
             },
         );
+    }
+
+    #[test]
+    fn from_parts_with_full_values() {
+        let cfg = OpenAiConfig::from_parts(
+            "https://example.test/v1".into(),
+            "sk-test".into(),
+            "gpt-4o-mini".into(),
+        )
+        .expect("config");
+        assert_eq!(cfg.endpoint, "https://example.test/v1");
+        assert_eq!(cfg.api_key, "sk-test");
+        assert_eq!(cfg.model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn from_parts_defaults_empty_endpoint() {
+        let cfg = OpenAiConfig::from_parts(
+            "".into(),
+            "sk-x".into(),
+            "gpt-4o-mini".into(),
+        )
+        .expect("config");
+        assert_eq!(cfg.endpoint, OpenAiConfig::DEFAULT_ENDPOINT);
+    }
+
+    #[test]
+    fn from_parts_errors_on_empty_api_key() {
+        let err = OpenAiConfig::from_parts(
+            "".into(),
+            "".into(),
+            "gpt-4o-mini".into(),
+        )
+        .expect_err("err");
+        assert!(format!("{err:#}").contains("API key is required"));
     }
 
     use warp_multi_agent_api::Request;
