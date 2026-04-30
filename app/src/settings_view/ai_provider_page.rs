@@ -1,6 +1,6 @@
 //! Settings page for configuring a custom AI provider (OpenAI- or
 //! Anthropic-compatible endpoint). Replaces the env-var-only path
-//! from M1b-chat. Form fields, persistence, and test-connection wiring
+//! from M1b-chat. Form fields, persistence, and model-fetch wiring
 //! all live here.
 
 use super::{
@@ -48,8 +48,10 @@ fn push_runtime_config_from_settings(ctx: &warpui::AppContext) {
 pub enum AiProviderPageAction {
     /// User changed the protocol selection.
     SelectProtocol(AiProtocol),
-    /// "Test connection" button clicked — wired up in Task 9.
-    TestConnection,
+    /// User selected a model from the dropdown.
+    SelectModel(String),
+    /// "Connect" button clicked — fetch /v1/models and populate the dropdown.
+    Connect,
 }
 
 // ── Protocol enum ─────────────────────────────────────────────────────────────
@@ -76,7 +78,7 @@ pub(crate) enum TestStatus {
     #[default]
     Idle,
     InProgress,
-    Success,
+    Success(usize),
     Failure(String),
 }
 
@@ -85,7 +87,7 @@ pub(crate) enum TestStatus {
 struct AiProviderConfigWidget {
     endpoint_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
-    model_editor: ViewHandle<EditorView>,
+    model_dropdown: ViewHandle<Dropdown<AiProviderPageAction>>,
     protocol_dropdown: ViewHandle<Dropdown<AiProviderPageAction>>,
     test_button: ViewHandle<ActionButton>,
 }
@@ -137,14 +139,21 @@ impl AiProviderConfigWidget {
             editor
         });
 
-        let saved_model_for_editor = saved_model.clone();
-        let model_editor = ctx.add_typed_action_view(move |ctx| {
-            let mut editor = EditorView::single_line(make_editor_options(false), ctx);
-            editor.set_placeholder_text("gpt-4o", ctx);
-            if !saved_model_for_editor.is_empty() {
-                editor.set_buffer_text(&saved_model_for_editor, ctx);
+        // Initialize the model dropdown with the saved model (if any) as
+        // its only entry. The user clicks "Connect" to replace this with the
+        // live list from `/v1/models`.
+        let saved_model_for_dropdown = saved_model.clone();
+        let model_dropdown = ctx.add_typed_action_view(move |ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            if !saved_model_for_dropdown.is_empty() {
+                let items = vec![DropdownItem::new(
+                    saved_model_for_dropdown.clone(),
+                    AiProviderPageAction::SelectModel(saved_model_for_dropdown.clone()),
+                )];
+                dropdown.add_items(items, ctx);
+                dropdown.set_selected_by_index(0, ctx);
             }
-            editor
+            dropdown
         });
 
         let initial_protocol_index = if saved_protocol == "anthropic" { 1 } else { 0 };
@@ -173,17 +182,6 @@ impl AiProviderConfigWidget {
             }
         });
 
-        // Save model on every edit.
-        ctx.subscribe_to_view(&model_editor, |_me, editor_handle, event, ctx| {
-            if let EditorEvent::Edited(_) = event {
-                let text = editor_handle.as_ref(ctx).buffer_text(ctx);
-                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let _ = settings.model.set_value(text, ctx);
-                });
-                push_runtime_config_from_settings(ctx);
-            }
-        });
-
         // Save API key on every edit.
         ctx.subscribe_to_view(&api_key_editor, |_me, editor_handle, event, ctx| {
             if let EditorEvent::Edited(_) = event {
@@ -196,10 +194,10 @@ impl AiProviderConfigWidget {
         });
 
         let test_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Test connection", SecondaryTheme)
+            ActionButton::new("Connect", SecondaryTheme)
                 .with_size(ButtonSize::Default)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AiProviderPageAction::TestConnection);
+                    ctx.dispatch_typed_action(AiProviderPageAction::Connect);
                 })
         });
 
@@ -210,7 +208,7 @@ impl AiProviderConfigWidget {
         Self {
             endpoint_editor,
             api_key_editor,
-            model_editor,
+            model_dropdown,
             protocol_dropdown,
             test_button,
         }
@@ -221,7 +219,7 @@ impl SettingsWidget for AiProviderConfigWidget {
     type View = AiProviderPageView;
 
     fn search_terms(&self) -> &str {
-        "ai provider custom endpoint openai anthropic api key model protocol test connection"
+        "ai provider custom endpoint openai anthropic api key model protocol connect"
     }
 
     fn render(
@@ -285,19 +283,36 @@ impl SettingsWidget for AiProviderConfigWidget {
             .with_child(ChildView::new(&self.protocol_dropdown).finish())
             .finish();
 
-        // Test button row with status text.
+        // Model dropdown row (label left, dropdown right).
+        let model_label = Text::new_inline(
+            "Model".to_string(),
+            appearance.ui_font_family(),
+            CONTENT_FONT_SIZE,
+        )
+        .with_color(label_color.into())
+        .finish();
+
+        let model_row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_child(Expanded::new(1., model_label).finish())
+            .with_child(ChildView::new(&self.model_dropdown).finish())
+            .finish();
+
+        // Connect button row with status text.
         let test_button_el = ChildView::new(&self.test_button).finish();
         let test_status_el: Box<dyn Element> = match &view.test_status {
             TestStatus::Idle => warpui::elements::Empty::new().finish(),
             TestStatus::InProgress => Text::new_inline(
-                "Testing\u{2026}".to_string(),
+                "Connecting\u{2026}".to_string(),
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
             .with_color(theme.disabled_ui_text_color().into())
             .finish(),
-            TestStatus::Success => Text::new_inline(
-                "\u{2713} Connection OK".to_string(),
+            TestStatus::Success(count) => Text::new_inline(
+                format!("\u{2713} Found {count} models"),
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
@@ -330,7 +345,12 @@ impl SettingsWidget for AiProviderConfigWidget {
             )
             .with_child(render_field("Endpoint URL", &self.endpoint_editor))
             .with_child(render_field("API Key", &self.api_key_editor))
-            .with_child(render_field("Model", &self.model_editor))
+            .with_child(
+                Container::new(model_row)
+                    .with_padding_top(4.)
+                    .with_padding_bottom(4.)
+                    .finish(),
+            )
             .with_child(
                 Container::new(protocol_row)
                     .with_padding_top(4.)
@@ -354,26 +374,25 @@ pub struct AiProviderPageView {
     /// their current buffer text without going through saved settings.
     endpoint_editor: ViewHandle<EditorView>,
     api_key_editor: ViewHandle<EditorView>,
-    model_editor: ViewHandle<EditorView>,
-    /// Current state of the "Test connection" operation.
+    model_dropdown: ViewHandle<Dropdown<AiProviderPageAction>>,
+    /// Current state of the "Connect" operation.
     pub(crate) test_status: TestStatus,
     /// Handle to the in-flight test future, kept so it can be aborted
-    /// if the user clicks Test again before the previous one finishes.
+    /// if the user clicks Connect again before the previous one finishes.
     _test_future: Option<SpawnedFutureHandle>,
 }
 
 impl AiProviderPageView {
     pub fn new(ctx: &mut ViewContext<AiProviderPageView>) -> Self {
         let widget = AiProviderConfigWidget::new(ctx);
-        // Clone handles before the widget is moved into the page.
         let endpoint_editor = widget.endpoint_editor.clone();
         let api_key_editor = widget.api_key_editor.clone();
-        let model_editor = widget.model_editor.clone();
+        let model_dropdown = widget.model_dropdown.clone();
         AiProviderPageView {
             page: PageType::new_monolith(widget, None, false),
             endpoint_editor,
             api_key_editor,
-            model_editor,
+            model_dropdown,
             test_status: TestStatus::Idle,
             _test_future: None,
         }
@@ -409,125 +428,91 @@ impl TypedActionView for AiProviderPageView {
                 });
                 push_runtime_config_from_settings(ctx);
             }
-            AiProviderPageAction::TestConnection => {
-                log::info!(
-                    "[ai_provider_page] Test connection clicked. \
-                     Reading endpoint/model/api_key from live editors."
-                );
-                // Read from the LIVE editor buffers so we always test what
-                // the user has typed RIGHT NOW, even if save-on-edit hasn't
-                // fired yet.
+            AiProviderPageAction::SelectModel(model) => {
+                let model = model.clone();
+                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.model.set_value(model, ctx);
+                });
+                push_runtime_config_from_settings(ctx);
+            }
+            AiProviderPageAction::Connect => {
+                log::info!("[ai_provider_page] Connect clicked. Fetching /v1/models.");
                 let endpoint = self.endpoint_editor.as_ref(ctx).buffer_text(ctx);
                 let api_key = self.api_key_editor.as_ref(ctx).buffer_text(ctx);
-                let model = self.model_editor.as_ref(ctx).buffer_text(ctx);
 
-                // Validate with from_parts before kicking off the async task.
-                let config = match ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        self.test_status = TestStatus::Failure(format!("{e:#}"));
-                        ctx.notify();
-                        return;
-                    }
-                };
+                if api_key.trim().is_empty() {
+                    self.test_status =
+                        TestStatus::Failure("API key is required".to_string());
+                    ctx.notify();
+                    return;
+                }
 
                 self.test_status = TestStatus::InProgress;
                 ctx.notify();
 
-                // Build a minimal "ping" request.
-                let request = build_ping_request();
-
-                // Abort any in-flight test.
                 self._test_future = None;
+
+                let saved_model =
+                    AiProviderSettings::as_ref(ctx).model.value().clone();
+                let model_dropdown_handle = self.model_dropdown.clone();
 
                 use warpui::r#async::FutureExt as _;
                 let handle = ctx.spawn(
                     async move {
-                        let adapter = ai_provider::OpenAiAdapter::new(config);
-                        log::info!(
-                            "[ai_provider_page] Test connection: opening stream to endpoint"
-                        );
-                        use ai_provider::AiProvider as _;
-                        use futures::StreamExt as _;
-                        let outcome = adapter
-                            .chat_stream(&request)
-                            .with_timeout(std::time::Duration::from_secs(10))
-                            .await;
-                        match outcome {
-                            Ok(Ok(mut stream)) => {
-                                // Consume up to a few events. If the first non-StreamInit
-                                // event is an Error, surface that. If we get past the
-                                // opening events without an error, treat the connection
-                                // as healthy.
-                                let mut events_seen = 0;
-                                loop {
-                                    let next = stream
-                                        .next()
-                                        .with_timeout(std::time::Duration::from_secs(10))
-                                        .await;
-                                    match next {
-                                        Ok(Some(Ok(_event))) => {
-                                            events_seen += 1;
-                                            // Any 3 events without an error → success.
-                                            // The first is StreamInit (synthesized), the
-                                            // next two are the opening ClientActions.
-                                            if events_seen >= 3 {
-                                                break Ok(());
-                                            }
-                                        }
-                                        Ok(Some(Err(e))) => break Err(format!("{e:#}")),
-                                        Ok(None) => break Err(
-                                            "Endpoint closed connection without responding"
-                                                .into(),
-                                        ),
-                                        Err(_timeout) => break Err("Connection timed out".into()),
+                        ai_provider::fetch_available_models(&endpoint, &api_key)
+                            .with_timeout(std::time::Duration::from_secs(15))
+                            .await
+                    },
+                    move |me, result, ctx| {
+                        match result {
+                            Ok(Ok(models)) => {
+                                let count = models.len();
+                                let items = models
+                                    .iter()
+                                    .map(|m| {
+                                        DropdownItem::new(
+                                            m.clone(),
+                                            AiProviderPageAction::SelectModel(m.clone()),
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
+                                model_dropdown_handle.update(ctx, |dropdown, ctx| {
+                                    dropdown.set_items(items, ctx);
+                                    if !saved_model.is_empty() {
+                                        dropdown.set_selected_by_name(saved_model.clone(), ctx);
+                                    } else if let Some(first) = models.first() {
+                                        // Auto-select the first model if nothing was saved.
+                                        dropdown.set_selected_by_name(first.clone(), ctx);
+                                    }
+                                });
+                                if saved_model.is_empty() {
+                                    if let Some(first) = models.first() {
+                                        let first = first.clone();
+                                        AiProviderSettings::handle(ctx).update(
+                                            ctx,
+                                            |s, ctx| {
+                                                let _ = s.model.set_value(first, ctx);
+                                            },
+                                        );
+                                        push_runtime_config_from_settings(ctx);
                                     }
                                 }
+                                me.test_status = TestStatus::Success(count);
                             }
-                            Ok(Err(e)) => Err(format!("{e:#}")),
-                            Err(_timeout) => Err("Connection timed out".to_string()),
+                            Ok(Err(e)) => {
+                                me.test_status = TestStatus::Failure(format!("{e:#}"));
+                            }
+                            Err(_timeout) => {
+                                me.test_status =
+                                    TestStatus::Failure("Connection timed out".to_string());
+                            }
                         }
-                    },
-                    |me, result, ctx| {
-                        me.test_status = match result {
-                            Ok(()) => {
-                                // Push the just-validated values into the runtime config
-                                // so the dispatcher uses them immediately.
-                                push_runtime_config_from_settings(ctx);
-                                TestStatus::Success
-                            }
-                            Err(msg) => TestStatus::Failure(msg),
-                        };
-                        me._test_future = None;
                         ctx.notify();
                     },
                 );
                 self._test_future = Some(handle);
             }
         }
-    }
-}
-
-/// Build a minimal one-shot "ping" request to test that the endpoint responds.
-fn build_ping_request() -> warp_multi_agent_api::Request {
-    use warp_multi_agent_api::request as req;
-    warp_multi_agent_api::Request {
-        input: Some(req::Input {
-            r#type: Some(req::input::Type::UserInputs(req::input::UserInputs {
-                inputs: vec![req::input::user_inputs::UserInput {
-                    input: Some(
-                        req::input::user_inputs::user_input::Input::UserQuery(
-                            req::input::UserQuery {
-                                query: "ping".to_string(),
-                                ..Default::default()
-                            },
-                        ),
-                    ),
-                }],
-            })),
-            ..Default::default()
-        }),
-        ..Default::default()
     }
 }
 

@@ -98,6 +98,66 @@ impl OpenAiConfig {
     }
 }
 
+/// Fetch the list of available model IDs from an OpenAI-compatible
+/// endpoint's `/v1/models` route. Bypasses `OpenAiConfig` validation
+/// because callers may invoke this before a model has been chosen.
+///
+/// Standard OpenAI returns `{"data": [{"id": "..."}, ...]}`; the same
+/// shape is used by LiteLLM, OpenRouter, Ollama (with /v1 prefix), etc.
+pub async fn fetch_available_models(
+    endpoint: &str,
+    api_key: &str,
+) -> std::result::Result<Vec<String>, Arc<AIApiError>> {
+    if api_key.trim().is_empty() {
+        return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "AI Provider API key is required"
+        ))));
+    }
+    let endpoint = if endpoint.trim().is_empty() {
+        OpenAiConfig::DEFAULT_ENDPOINT
+    } else {
+        endpoint.trim_end_matches('/')
+    };
+    let url = format!("{endpoint}/models");
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+        .map_err(|e| {
+            Arc::new(AIApiError::Other(anyhow::anyhow!(
+                "fetch_models: HTTP error: {e:#}"
+            )))
+        })?;
+    if !resp.status().is_success() {
+        return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "fetch_models: HTTP {}",
+            resp.status()
+        ))));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "fetch_models: parse error: {e:#}"
+        )))
+    })?;
+    let models = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if models.is_empty() {
+        return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "fetch_models: endpoint returned no models"
+        ))));
+    }
+    Ok(models)
+}
+
 use std::collections::HashMap;
 use serde_json::json;
 use warp_multi_agent_api::Request;
