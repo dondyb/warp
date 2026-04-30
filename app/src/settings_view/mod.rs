@@ -1130,7 +1130,7 @@ impl SettingsView {
         });
 
         // AI Provider page
-        let ai_provider_page_handle = ctx.add_view(AiProviderPageView::new);
+        let ai_provider_page_handle = ctx.add_typed_action_view(AiProviderPageView::new);
 
         // MCP Servers page
         let mcp_servers_page_handle = ctx.add_typed_action_view(MCPServersSettingsPageView::new);
