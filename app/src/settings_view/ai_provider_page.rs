@@ -1,9 +1,7 @@
 //! Settings page for configuring a custom AI provider (OpenAI- or
 //! Anthropic-compatible endpoint). Replaces the env-var-only path
-//! from M1b-chat.
-//!
-//! Form fields and local state live here. Persistence is added in Tasks 7 + 8.
-//! Test-connection wiring is added in Task 9.
+//! from M1b-chat. Form fields, persistence, and test-connection wiring
+//! all live here.
 
 use super::{
     settings_page::{
@@ -30,34 +28,15 @@ use warpui::{
     AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 use warpui::r#async::SpawnedFutureHandle;
-use warpui_extras::secure_storage::AppContextExt as _;
 
-/// Secure-storage key for the user's BYO LLM API key. Distinct from
-/// `crates/ai/src/api_keys.rs`'s `"AiApiKeys"` (which stores Warp's
-/// hosted-AI keys) so the two don't collide.
-const API_KEY_STORAGE_KEY: &str = "BringYourOwnLlmApiKey";
-
-fn load_byo_api_key(ctx: &warpui::AppContext) -> Option<String> {
-    ctx.secure_storage().read_value(API_KEY_STORAGE_KEY).ok()
-}
-
-fn save_byo_api_key(ctx: &warpui::AppContext, key: &str) {
-    if let Err(e) = ctx.secure_storage().write_value(API_KEY_STORAGE_KEY, key) {
-        log::warn!("failed to save BYO LLM API key to secure storage: {e:#}");
-    }
-}
-
-/// Read the current settings + secure storage and push them into the
-/// process-wide `ai_provider::RUNTIME_CONFIG` singleton so that the
-/// dispatcher picks up GUI-configured values without requiring env vars.
+/// Read the current settings and push them into the process-wide
+/// `ai_provider::RUNTIME_CONFIG` singleton so the dispatcher picks up
+/// GUI-configured values without requiring env vars.
 fn push_runtime_config_from_settings(ctx: &warpui::AppContext) {
     let settings = AiProviderSettings::as_ref(ctx);
     let endpoint = settings.endpoint.value().to_string();
     let model = settings.model.value().to_string();
-    let api_key = ctx
-        .secure_storage()
-        .read_value(API_KEY_STORAGE_KEY)
-        .unwrap_or_default();
+    let api_key = settings.api_key.value().to_string();
 
     let cfg = ai_provider::OpenAiConfig::from_parts(endpoint, api_key, model).ok();
     ai_provider::set_runtime_config(cfg);
@@ -148,7 +127,7 @@ impl AiProviderConfigWidget {
             editor
         });
 
-        let saved_key = load_byo_api_key(ctx).unwrap_or_default();
+        let saved_key = AiProviderSettings::as_ref(ctx).api_key.value().clone();
         let api_key_editor = ctx.add_typed_action_view(move |ctx| {
             let mut editor = EditorView::single_line(make_editor_options(true), ctx);
             editor.set_placeholder_text("sk-...", ctx);
@@ -205,11 +184,13 @@ impl AiProviderConfigWidget {
             }
         });
 
-        // Save API key on every edit (secure storage, not TOML).
+        // Save API key on every edit.
         ctx.subscribe_to_view(&api_key_editor, |_me, editor_handle, event, ctx| {
             if let EditorEvent::Edited(_) = event {
                 let text = editor_handle.as_ref(ctx).buffer_text(ctx);
-                save_byo_api_key(ctx, &text);
+                AiProviderSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let _ = settings.api_key.set_value(text, ctx);
+                });
                 push_runtime_config_from_settings(ctx);
             }
         });

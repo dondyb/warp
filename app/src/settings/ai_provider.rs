@@ -1,5 +1,5 @@
 //! Settings for the custom AI Provider — endpoint URL, model, protocol.
-//! API key is stored in OS secure storage, not in TOML.
+//! All values including the API key are stored in TOML (single-user OSS dev fork; the file is mode 0600).
 
 use settings::{macros::define_settings_group, SupportedPlatforms, SyncToCloud};
 
@@ -33,5 +33,15 @@ define_settings_group!(AiProviderSettings, settings: [
         storage_key: "AiProviderProtocol",
         toml_path: "ai_provider.protocol",
         description: "The protocol for the custom AI provider (openai or anthropic).",
+    },
+    api_key: AiProviderApiKey {
+        type: String,
+        default: "".to_string(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: true,
+        storage_key: "AiProviderApiKey",
+        toml_path: "ai_provider.api_key",
+        description: "API key for the custom AI provider. Stored in TOML under user-only file mode.",
     },
 ]);
