@@ -17339,7 +17339,7 @@ impl Workspace {
             );
         }
 
-        if FeatureFlag::AvatarInTabBar.is_enabled() {
+        if FeatureFlag::AvatarInTabBar.is_enabled() && ChannelState::is_cloud_enabled() {
             target.add_child(
                 Container::new(self.render_avatar_button(appearance, ctx))
                     .with_margin_left(TAB_BAR_PADDING_LEFT)
