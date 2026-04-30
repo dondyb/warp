@@ -220,14 +220,19 @@ impl TypedActionView for MainSettingsPageView {
                 );
                 ctx.notify();
             }
-            MainPageAction::Upgrade { team_uid, user_id } => match team_uid {
-                Some(team_uid) => {
-                    ctx.open_url(&UserWorkspaces::upgrade_link_for_team(*team_uid));
+            MainPageAction::Upgrade { team_uid, user_id } => {
+                if ChannelState::is_cloud_enabled() {
+                    match team_uid {
+                        Some(team_uid) => {
+                            ctx.open_url(&UserWorkspaces::upgrade_link_for_team(*team_uid));
+                        }
+                        None => {
+                            ctx.open_url(&UserWorkspaces::upgrade_link(*user_id));
+                        }
+                    }
                 }
-                None => {
-                    ctx.open_url(&UserWorkspaces::upgrade_link(*user_id));
-                }
-            },
+                // else: no-op in OSS fork; should be unreachable since the button is hidden
+            }
             MainPageAction::GenerateStripeBillingPortalLink { team_uid } => {
                 UserWorkspaces::handle(ctx).update(ctx, |user_workspaces, ctx| {
                     user_workspaces.generate_stripe_billing_portal_link(*team_uid, ctx);
@@ -320,73 +325,78 @@ impl AccountWidget {
         auth_state: &AuthState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let button_styles = UiComponentStyles {
-            font_size: Some(14.),
-            font_weight: Some(Weight::Semibold),
-            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
-            padding: Some(Coords {
-                top: 12.,
-                bottom: 12.,
-                left: 40.,
-                right: 40.,
-            }),
-            ..Default::default()
-        };
-
-        let user_info = appearance
-            .ui_builder()
-            .button(
-                ButtonVariant::Accent,
-                self.ui_state_handles.anonymous_user_sign_up_button.clone(),
-            )
-            .with_style(button_styles)
-            .with_text_label("Sign up".to_owned())
-            .build()
-            .on_click(move |ctx, _, _| {
-                ctx.dispatch_typed_action(MainPageAction::SignupAnonymousUser);
-            })
-            .finish();
-
         let mut plan_info = Flex::column()
             .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)
             .with_cross_axis_alignment(CrossAxisAlignment::End);
         let current_user_id = auth_state.user_id().unwrap_or_default();
 
         plan_info.add_child(render_customer_type_badge(appearance, "Free".into()));
-        plan_info.add_child(
-            Container::new(
-                appearance
-                    .ui_builder()
-                    .button(
-                        ButtonVariant::Link,
-                        self.ui_state_handles.upgrade_link.clone(),
-                    )
-                    .with_text_and_icon_label(
-                        TextAndIcon::new(
-                            TextAndIconAlignment::IconFirst,
-                            "Compare plans",
-                            Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
-                            MainAxisSize::Min,
-                            MainAxisAlignment::Center,
-                            vec2f(14., 14.),
-                        )
-                        .with_inner_padding(4.),
-                    )
-                    .build()
-                    .on_click(move |ctx, _, _| {
-                        ctx.dispatch_typed_action(MainPageAction::Upgrade {
-                            team_uid: None,
-                            user_id: current_user_id,
-                        });
-                    })
-                    .finish(),
-            )
-            .with_margin_top(8.)
-            .finish(),
-        );
 
-        Flex::row()
-            .with_child(
+        if ChannelState::is_cloud_enabled() {
+            plan_info.add_child(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .button(
+                            ButtonVariant::Link,
+                            self.ui_state_handles.upgrade_link.clone(),
+                        )
+                        .with_text_and_icon_label(
+                            TextAndIcon::new(
+                                TextAndIconAlignment::IconFirst,
+                                "Compare plans",
+                                Icon::CoinsStacked.to_warpui_icon(appearance.theme().accent()),
+                                MainAxisSize::Min,
+                                MainAxisAlignment::Center,
+                                vec2f(14., 14.),
+                            )
+                            .with_inner_padding(4.),
+                        )
+                        .build()
+                        .on_click(move |ctx, _, _| {
+                            ctx.dispatch_typed_action(MainPageAction::Upgrade {
+                                team_uid: None,
+                                user_id: current_user_id,
+                            });
+                        })
+                        .finish(),
+                )
+                .with_margin_top(8.)
+                .finish(),
+            );
+        }
+
+        let mut row = Flex::row();
+
+        if ChannelState::is_cloud_enabled() {
+            let button_styles = UiComponentStyles {
+                font_size: Some(14.),
+                font_weight: Some(Weight::Semibold),
+                border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+                padding: Some(Coords {
+                    top: 12.,
+                    bottom: 12.,
+                    left: 40.,
+                    right: 40.,
+                }),
+                ..Default::default()
+            };
+
+            let user_info = appearance
+                .ui_builder()
+                .button(
+                    ButtonVariant::Accent,
+                    self.ui_state_handles.anonymous_user_sign_up_button.clone(),
+                )
+                .with_style(button_styles)
+                .with_text_label("Sign up".to_owned())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(MainPageAction::SignupAnonymousUser);
+                })
+                .finish();
+
+            row.add_child(
                 Shrinkable::new(
                     1.0,
                     Flex::row()
@@ -396,9 +406,11 @@ impl AccountWidget {
                         .finish(),
                 )
                 .finish(),
-            )
-            .with_child(Align::new(plan_info.finish()).right().finish())
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
+            );
+        }
+
+        row.add_child(Align::new(plan_info.finish()).right().finish());
+        row.with_cross_axis_alignment(CrossAxisAlignment::Start)
             .finish()
     }
 
@@ -536,7 +548,9 @@ impl AccountWidget {
                     }
 
                     // If the team is upgradeable to self-serve tier, show them the upgrade link.
-                    if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
+                    if ChannelState::is_cloud_enabled()
+                        && team.billing_metadata.can_upgrade_to_higher_tier_plan()
+                    {
                         let description = match team.billing_metadata.customer_type {
                             CustomerType::Prosumer => "Upgrade to Turbo plan",
                             CustomerType::Turbo => "Upgrade to Lightspeed plan",
@@ -569,25 +583,27 @@ impl AccountWidget {
             let plan_badge_child = render_customer_type_badge(appearance, "Free".into());
             plan_info.add_child(plan_badge_child);
 
-            plan_info.add_child(
-                appearance
-                    .ui_builder()
-                    .link(
-                        "Compare plans".into(),
-                        None,
-                        Some(Box::new(move |ctx| {
-                            ctx.dispatch_typed_action(MainPageAction::Upgrade {
-                                team_uid: None,
-                                user_id: current_user_id,
-                            });
-                        })),
-                        self.ui_state_handles.upgrade_link.clone(),
-                    )
-                    .soft_wrap(false)
-                    .build()
-                    .with_margin_top(8.)
-                    .finish(),
-            );
+            if ChannelState::is_cloud_enabled() {
+                plan_info.add_child(
+                    appearance
+                        .ui_builder()
+                        .link(
+                            "Compare plans".into(),
+                            None,
+                            Some(Box::new(move |ctx| {
+                                ctx.dispatch_typed_action(MainPageAction::Upgrade {
+                                    team_uid: None,
+                                    user_id: current_user_id,
+                                });
+                            })),
+                            self.ui_state_handles.upgrade_link.clone(),
+                        )
+                        .soft_wrap(false)
+                        .build()
+                        .with_margin_top(8.)
+                        .finish(),
+                );
+            }
         }
 
         let mut row = Flex::row()
