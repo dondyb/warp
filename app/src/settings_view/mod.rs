@@ -1185,38 +1185,49 @@ impl SettingsView {
 
         // Build sidebar nav items. AI page is presented as an "Agents" umbrella
         // with subpages; the actual AI SettingsPage is hidden from direct sidebar listing.
-        let mut nav_items = vec![
-            SettingsNavItem::Page(SettingsSection::Account),
-            SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Agents",
-                SettingsSection::ai_subpages().to_vec(),
-            )),
-            SettingsNavItem::Page(SettingsSection::BillingAndUsage),
-            SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Code",
-                vec![
-                    SettingsSection::CodeIndexing,
-                    SettingsSection::EditorAndCodeReview,
-                ],
-            )),
-            SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Cloud platform",
-                vec![
-                    SettingsSection::CloudEnvironments,
-                    SettingsSection::OzCloudAPIKeys,
-                ],
-            )),
-            SettingsNavItem::Page(SettingsSection::Teams),
-            SettingsNavItem::Page(SettingsSection::Appearance),
-            SettingsNavItem::Page(SettingsSection::Features),
-            SettingsNavItem::Page(SettingsSection::Keybindings),
-            SettingsNavItem::Page(SettingsSection::Warpify),
-            SettingsNavItem::Page(SettingsSection::Referrals),
-            SettingsNavItem::Page(SettingsSection::SharedBlocks),
-            SettingsNavItem::Page(SettingsSection::WarpDrive),
-            SettingsNavItem::Page(SettingsSection::Privacy),
-            SettingsNavItem::Page(SettingsSection::About),
-        ];
+        // Cloud-tied entries (BillingAndUsage, Teams, Referrals, WarpDrive) are hidden
+        // when running as the OSS build.
+        let cloud = ChannelState::is_cloud_enabled();
+        let mut nav_items: Vec<SettingsNavItem> = Vec::new();
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Account));
+        nav_items.push(SettingsNavItem::Page(SettingsSection::AiProvider));
+        nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
+            "Agents",
+            SettingsSection::ai_subpages().to_vec(),
+        )));
+        if cloud {
+            nav_items.push(SettingsNavItem::Page(SettingsSection::BillingAndUsage));
+        }
+        nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
+            "Code",
+            vec![
+                SettingsSection::CodeIndexing,
+                SettingsSection::EditorAndCodeReview,
+            ],
+        )));
+        nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
+            "Cloud platform",
+            vec![
+                SettingsSection::CloudEnvironments,
+                SettingsSection::OzCloudAPIKeys,
+            ],
+        )));
+        if cloud {
+            nav_items.push(SettingsNavItem::Page(SettingsSection::Teams));
+        }
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Appearance));
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Features));
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Keybindings));
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Warpify));
+        if cloud {
+            nav_items.push(SettingsNavItem::Page(SettingsSection::Referrals));
+        }
+        nav_items.push(SettingsNavItem::Page(SettingsSection::SharedBlocks));
+        if cloud {
+            nav_items.push(SettingsNavItem::Page(SettingsSection::WarpDrive));
+        }
+        nav_items.push(SettingsNavItem::Page(SettingsSection::Privacy));
+        nav_items.push(SettingsNavItem::Page(SettingsSection::About));
 
         // Resolve the initial page: map internal backing-page sections to their default subpage.
         let initial_page = match page {

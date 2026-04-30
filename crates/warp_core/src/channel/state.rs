@@ -388,6 +388,12 @@ impl ChannelState {
             Channel::Oss => "warposs",
         }
     }
+
+    /// Returns whether cloud-backed features (billing, teams, Warp Drive, etc.)
+    /// are available in this build. Returns `false` for the OSS channel.
+    pub fn is_cloud_enabled() -> bool {
+        !matches!(Self::channel(), Channel::Oss)
+    }
 }
 
 /// Derives an HTTP(S) origin URL from a WebSocket URL by rewriting the scheme
