@@ -95,6 +95,10 @@ impl ToolRegistry {
                 &read_search::READ_SHELL_COMMAND_OUTPUT,
                 &read_search::READ_SKILL,
                 &read_search::READ_MCP_RESOURCE,
+                &edit_write::APPLY_FILE_DIFFS,
+                &edit_write::EDIT_DOCUMENTS,
+                &edit_write::CREATE_DOCUMENTS,
+                &edit_write::WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
             ],
         }
     }
@@ -164,7 +168,7 @@ impl ToolRegistry {
 // Submodules — populated in Phase B + Phase C:
 pub mod run_shell_command;
 pub mod read_search;
-// pub mod edit_write;
+pub mod edit_write;
 // pub mod misc;
 
 #[cfg(test)]
