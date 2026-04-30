@@ -361,6 +361,23 @@ fn build_messages_from_request(
         _ => {}
     }
 
+    // Part 2: Defensive synthetic-user-query. If the messages array produced
+    // above has no role:user entry (e.g., a tool-result-only turn whose
+    // corresponding UserQuery was never stored in task history), prepend a
+    // synthetic placeholder so the request never hits "No user query found".
+    let has_user_message = out.iter().any(|m| {
+        m.get("role").and_then(|r| r.as_str()) == Some("user")
+    });
+    if !has_user_message {
+        out.insert(
+            0,
+            json!({
+                "role": "user",
+                "content": "(continue)",
+            }),
+        );
+    }
+
     Ok(out)
 }
 
@@ -483,30 +500,40 @@ pub(crate) fn action_create_task(task_id: &str) -> warp_multi_agent_api::ClientA
     }
 }
 
-/// Build an `AddMessagesToTask` action that seeds the task with one empty
-/// `AgentOutput` message — subsequent `AppendToMessageContent` actions
-/// stream text into its `text` field.
-pub(crate) fn action_add_empty_agent_output_message(
+/// Build an `AddMessagesToTask` action from an arbitrary list of messages.
+/// Used by `chat_stream` to batch the optional UserQuery placeholder and
+/// the required empty AgentOutput message into a single opening action.
+pub(crate) fn action_add_messages(
     task_id: &str,
-    message_id: &str,
+    messages: Vec<warp_multi_agent_api::Message>,
 ) -> warp_multi_agent_api::ClientAction {
-    let msg = Message {
-        id: message_id.to_string(),
-        task_id: task_id.to_string(),
-        message: Some(message::Message::AgentOutput(
-            message::AgentOutput {
-                text: String::new(),
-            },
-        )),
-        ..Default::default()
-    };
     warp_multi_agent_api::ClientAction {
         action: Some(client_action::Action::AddMessagesToTask(
             client_action::AddMessagesToTask {
                 task_id: task_id.to_string(),
-                messages: vec![msg],
+                messages,
             },
         )),
+    }
+}
+
+/// Extract the user query text from the request's current input, if the
+/// input contains a `UserQuery` variant. Returns `None` for tool-result-only
+/// continuations (so we skip adding a redundant UserQuery to task history).
+fn current_user_query_text(request: &Request) -> Option<String> {
+    use warp_multi_agent_api::request::input;
+    let input = request.input.as_ref()?;
+    let input_type = input.r#type.as_ref()?;
+    match input_type {
+        input::Type::UserInputs(user_inputs) => {
+            user_inputs.inputs.iter().find_map(|ui| match ui.input.as_ref() {
+                Some(input::user_inputs::user_input::Input::UserQuery(uq)) => {
+                    Some(uq.query.clone())
+                }
+                _ => None,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -641,12 +668,49 @@ impl AiProvider for OpenAiAdapter {
         );
 
         // Phase 1: opening events (Init, BeginTransaction, [CreateTask,] AddMessagesToTask).
+        //
+        // Part 1 fix: if the request carries a UserQuery (i.e., it's a fresh user
+        // message, not a tool-result-only continuation), emit a Message::UserQuery
+        // into the task history BEFORE the empty AgentOutput placeholder. This
+        // ensures that on the next turn, `build_messages_from_request` can walk
+        // the task history and find a role:user message, avoiding the
+        // "No user query found in messages" error from the endpoint.
+        let mut messages_to_add: Vec<warp_multi_agent_api::Message> = Vec::new();
+
+        if let Some(user_query_text) = current_user_query_text(request) {
+            let user_query_msg = warp_multi_agent_api::Message {
+                id: uuid::Uuid::new_v4().to_string(),
+                task_id: ids.task_id.clone(),
+                message: Some(message::Message::UserQuery(
+                    message::UserQuery {
+                        query: user_query_text,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            messages_to_add.push(user_query_msg);
+        }
+
+        // Always add the empty AgentOutput placeholder for streaming text deltas.
+        let agent_output_msg = warp_multi_agent_api::Message {
+            id: ids.message_id.clone(),
+            task_id: ids.task_id.clone(),
+            message: Some(message::Message::AgentOutput(
+                message::AgentOutput {
+                    text: String::new(),
+                },
+            )),
+            ..Default::default()
+        };
+        messages_to_add.push(agent_output_msg);
+
         let mut opening_actions: Vec<warp_multi_agent_api::ClientAction> = Vec::new();
         opening_actions.push(action_begin_transaction());
         if !is_continuation {
             opening_actions.push(action_create_task(&ids.task_id));
         }
-        opening_actions.push(action_add_empty_agent_output_message(&ids.task_id, &ids.message_id));
+        opening_actions.push(action_add_messages(&ids.task_id, messages_to_add));
 
         let opening: Vec<std::result::Result<ResponseEvent, Arc<AIApiError>>> = vec![
             Ok(build_stream_init(&ids)),
