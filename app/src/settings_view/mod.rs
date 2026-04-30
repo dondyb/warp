@@ -1196,7 +1196,9 @@ impl SettingsView {
         // when running as the OSS build.
         let cloud = ChannelState::is_cloud_enabled();
         let mut nav_items: Vec<SettingsNavItem> = Vec::new();
-        nav_items.push(SettingsNavItem::Page(SettingsSection::Account));
+        if cloud {
+            nav_items.push(SettingsNavItem::Page(SettingsSection::Account));
+        }
         nav_items.push(SettingsNavItem::Page(SettingsSection::AiProvider));
         nav_items.push(SettingsNavItem::Umbrella(SettingsUmbrella::new(
             "Agents",
@@ -1247,7 +1249,9 @@ impl SettingsView {
             Some(SettingsSection::AI) => SettingsSection::WarpAgent,
             Some(SettingsSection::Code) => SettingsSection::CodeIndexing,
             Some(section) if section.is_subpage() => section,
-            other => other.unwrap_or_default(),
+            Some(other) => other,
+            None if cloud => SettingsSection::Account,
+            None => SettingsSection::AiProvider,
         };
 
         // Auto-expand the umbrella if the initial page is one of its subpages.
