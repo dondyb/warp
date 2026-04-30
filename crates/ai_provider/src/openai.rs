@@ -135,12 +135,18 @@ impl OpenAiAdapter {
     /// MVP: extracts the user query (UserQuery only — other input variants
     /// produce a "not supported" error), wraps in a system + user messages
     /// array, and sets the configured model with `stream: true`.
+    ///
+    /// When `request.settings.supported_tools` is non-empty, a `tools[]`
+    /// array is added to the body so the model knows which tools it can call.
+    /// The key is omitted entirely when no tools are supported (or the
+    /// registry is empty), to avoid sending an empty array to strict
+    /// OpenAI-compatible endpoints.
     pub(crate) fn build_request_body(
         &self,
         request: &Request,
     ) -> std::result::Result<serde_json::Value, Arc<AIApiError>> {
         let user_text = extract_user_query(request)?;
-        Ok(json!({
+        let mut body = json!({
             "model": self.config.model,
             "stream": true,
             "messages": [
@@ -153,7 +159,24 @@ impl OpenAiAdapter {
                     "content": user_text
                 }
             ]
-        }))
+        });
+
+        // Add tools[] if the client declared supported tools.
+        if let Some(settings) = request.settings.as_ref() {
+            if !settings.supported_tools.is_empty() {
+                let registry = crate::ToolRegistry::default()
+                    .filter_to_supported(&settings.supported_tools);
+                let tools_json = registry.openai_tools_json();
+                if let serde_json::Value::Array(arr) = &tools_json {
+                    if !arr.is_empty() {
+                        body["tools"] = tools_json;
+                        // The model decides whether to call a tool; default is "auto".
+                    }
+                }
+            }
+        }
+
+        Ok(body)
     }
 
 }
@@ -699,6 +722,19 @@ mod tests {
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "user");
         assert_eq!(messages[1]["content"], "how are you");
+    }
+
+    #[test]
+    fn build_request_body_omits_tools_when_supported_tools_empty() {
+        let cfg = OpenAiConfig {
+            endpoint: "https://example.test/v1".into(),
+            api_key: "sk-x".into(),
+            model: "gpt-4o-mini".into(),
+        };
+        let adapter = OpenAiAdapter::new(cfg);
+        let req = build_request_with_query("hello");
+        let body = adapter.build_request_body(&req).expect("body");
+        assert!(body.get("tools").is_none(), "tools should be absent when supported_tools is empty");
     }
 
     #[allow(dead_code)]
