@@ -52,6 +52,23 @@ pub trait ToolDefinition: Send + Sync {
         &self,
         result: &input::tool_call_result::Result,
     ) -> std::result::Result<String, Arc<AIApiError>>;
+
+    /// True iff this tool corresponds to the given proto `ToolCall::Tool` variant
+    /// (used when reconstructing the assistant's previous tool_calls from history).
+    fn matches_proto_call(&self, tool: &message::tool_call::Tool) -> bool;
+
+    /// True iff this tool corresponds to the given proto `ToolCallResult::Result`
+    /// variant from `Request.input` (used when translating incoming results to
+    /// OpenAI `role: tool` messages).
+    fn matches_proto_result(&self, result: &input::tool_call_result::Result) -> bool;
+
+    /// Encode the proto `ToolCall::Tool` variant back into the JSON args form
+    /// used when reconstructing the assistant's previous tool_calls in
+    /// multi-turn requests. Default: return empty object (sufficient until
+    /// Phase B's concrete impls override it).
+    fn encode_call_args(&self, _tool: &message::tool_call::Tool) -> Value {
+        Value::Object(serde_json::Map::new())
+    }
 }
 
 /// Registry of all known tool definitions. Cheap to construct (uses static
@@ -79,6 +96,24 @@ impl ToolRegistry {
     /// Look up a tool by its OpenAI function name.
     pub fn by_name(&self, name: &str) -> Option<&'static dyn ToolDefinition> {
         self.tools.iter().find(|t| t.name() == name).copied()
+    }
+
+    /// Look up a tool by matching its proto `ToolCall::Tool` variant.
+    /// Returns `None` when no concrete tool is registered (e.g. Phase A).
+    pub fn tool_for_proto(
+        &self,
+        tool: &message::tool_call::Tool,
+    ) -> Option<&'static dyn ToolDefinition> {
+        self.tools.iter().find(|t| t.matches_proto_call(tool)).copied()
+    }
+
+    /// Look up a tool by matching its proto `ToolCallResult` result variant
+    /// from `Request.input`. Returns `None` when no concrete tool is registered.
+    pub fn tool_for_proto_result(
+        &self,
+        result: &input::tool_call_result::Result,
+    ) -> Option<&'static dyn ToolDefinition> {
+        self.tools.iter().find(|t| t.matches_proto_result(result)).copied()
     }
 
     /// Return all registered tools as `tools[]` JSON entries for OpenAI.

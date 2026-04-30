@@ -194,41 +194,36 @@ impl OpenAiAdapter {
     }
 
     /// Build the OpenAI Chat Completions JSON body from a Warp `Request`.
-    /// MVP: extracts the user query (UserQuery only — other input variants
-    /// produce a "not supported" error), wraps in a system + user messages
-    /// array, and sets the configured model with `stream: true`.
     ///
-    /// When `request.settings.supported_tools` is non-empty, a `tools[]`
-    /// array is added to the body so the model knows which tools it can call.
-    /// The key is omitted entirely when no tools are supported (or the
-    /// registry is empty), to avoid sending an empty array to strict
-    /// OpenAI-compatible endpoints.
+    /// Walks `request.task_context.tasks[*].messages` to reconstruct the full
+    /// conversation history (UserQuery → role:user, AgentOutput → role:assistant,
+    /// ToolCall → role:assistant with tool_calls), then appends the current
+    /// input — either a UserQuery (role:user) or ToolCallResult entries
+    /// (role:tool). When `request.settings.supported_tools` is non-empty, a
+    /// `tools[]` array is added so the model knows which tools it can call.
     pub(crate) fn build_request_body(
         &self,
         request: &Request,
     ) -> std::result::Result<serde_json::Value, Arc<AIApiError>> {
-        let user_text = extract_user_query(request)?;
+        let mut messages: Vec<serde_json::Value> = vec![
+            json!({ "role": "system", "content": SYSTEM_PROMPT }),
+        ];
+
+        let registry = crate::ToolRegistry::default();
+        let messages_from_request = build_messages_from_request(request, &registry)?;
+        messages.extend(messages_from_request);
+
         let mut body = json!({
             "model": self.config.model,
             "stream": true,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": user_text
-                }
-            ]
+            "messages": messages,
         });
 
         // Add tools[] if the client declared supported tools.
         if let Some(settings) = request.settings.as_ref() {
             if !settings.supported_tools.is_empty() {
-                let registry = crate::ToolRegistry::default()
-                    .filter_to_supported(&settings.supported_tools);
-                let tools_json = registry.openai_tools_json();
+                let supported_registry = registry.filter_to_supported(&settings.supported_tools);
+                let tools_json = supported_registry.openai_tools_json();
                 if let serde_json::Value::Array(arr) = &tools_json {
                     if !arr.is_empty() {
                         body["tools"] = tools_json;
@@ -255,7 +250,9 @@ const SYSTEM_PROMPT: &str = "You are a helpful AI assistant integrated into a \
 /// Looks at `Input::user_inputs.user_query` (the current path) and the
 /// deprecated `Input::user_query`. Other input variants produce an error
 /// because M1b-chat does not yet support them.
-#[allow(deprecated)]
+///
+/// Used in tests; the main path now goes through `build_messages_from_request`.
+#[allow(dead_code, deprecated)]
 pub(crate) fn extract_user_query(
     request: &Request,
 ) -> std::result::Result<String, Arc<AIApiError>> {
@@ -289,6 +286,123 @@ pub(crate) fn extract_user_query(
             "OpenAI adapter: Request.input.type is missing"
         )))),
     }
+}
+
+/// Walk `request.task_context.tasks[*].messages[*]` to reconstruct the
+/// conversation history as OpenAI-shaped messages (role: user, role: assistant,
+/// role: tool), then append the current `request.input` entries.
+///
+/// - `Message::UserQuery`  → `{ "role": "user", "content": ... }`
+/// - `Message::AgentOutput` → `{ "role": "assistant", "content": ... }`
+/// - `Message::ToolCall`   → `{ "role": "assistant", "tool_calls": [...] }`
+///   (only emitted when the tool_def for the variant is in the registry)
+/// - `UserInput::ToolCallResult` → `{ "role": "tool", "tool_call_id": ..., "content": ... }`
+/// - `UserInput::UserQuery`      → `{ "role": "user", "content": ... }`
+///
+/// When the registry is empty (Phase A/early Phase B), the ToolCall history
+/// re-emission and ToolCallResult → role:tool translation gracefully fall
+/// through (no message emitted for those variants).
+fn build_messages_from_request(
+    request: &Request,
+    registry: &crate::ToolRegistry,
+) -> std::result::Result<Vec<serde_json::Value>, Arc<AIApiError>> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+
+    // Walk past tasks for multi-turn history.
+    if let Some(tc) = request.task_context.as_ref() {
+        for task in &tc.tasks {
+            for msg in &task.messages {
+                use warp_multi_agent_api::message;
+                match msg.message.as_ref() {
+                    Some(message::Message::UserQuery(uq)) => {
+                        out.push(json!({ "role": "user", "content": uq.query }));
+                    }
+                    Some(message::Message::AgentOutput(ao)) => {
+                        out.push(json!({ "role": "assistant", "content": ao.text }));
+                    }
+                    Some(message::Message::ToolCall(tc_msg)) => {
+                        // Reconstruct the assistant's tool_call message so OpenAI
+                        // sees the full conversation context.
+                        if let Some(tool_variant) = tc_msg.tool.as_ref() {
+                            if let Some(tool_def) = registry.tool_for_proto(tool_variant) {
+                                let args = tool_def.encode_call_args(tool_variant);
+                                out.push(json!({
+                                    "role": "assistant",
+                                    "tool_calls": [{
+                                        "id": tc_msg.tool_call_id,
+                                        "type": "function",
+                                        "function": {
+                                            "name": tool_def.name(),
+                                            "arguments": serde_json::to_string(&args)
+                                                .unwrap_or_default(),
+                                        }
+                                    }]
+                                }));
+                            }
+                        }
+                    }
+                    Some(message::Message::ToolCallResult(_)) | _ => {
+                        // ToolCallResult in history is not re-emitted here because the
+                        // corresponding role:tool message was already produced in a
+                        // prior request's input processing. Other variants (ServerEvent,
+                        // Summarization, …) have no direct OpenAI representation.
+                    }
+                }
+            }
+        }
+    }
+
+    // Append the current input. A missing input is an error — we have no
+    // user message to send to OpenAI.
+    let Some(input) = request.input.as_ref() else {
+        return Err(Arc::new(AIApiError::Other(anyhow::anyhow!(
+            "OpenAI adapter: Request.input is missing"
+        ))));
+    };
+
+    use warp_multi_agent_api::request::input as req_input;
+    match input.r#type.as_ref() {
+        Some(req_input::Type::UserInputs(user_inputs)) => {
+            for ui in &user_inputs.inputs {
+                match ui.input.as_ref() {
+                    Some(req_input::user_inputs::user_input::Input::UserQuery(uq)) => {
+                        out.push(json!({ "role": "user", "content": uq.query }));
+                    }
+                    Some(req_input::user_inputs::user_input::Input::ToolCallResult(tcr)) => {
+                        if let Some(result_variant) = tcr.result.as_ref() {
+                            if let Some(tool_def) =
+                                registry.tool_for_proto_result(result_variant)
+                            {
+                                let content_text =
+                                    tool_def.encode_result_text(result_variant)?;
+                                out.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": tcr.tool_call_id,
+                                    "content": content_text,
+                                }));
+                            } else {
+                                // Unknown tool result variant — represent as a generic
+                                // placeholder so the model knows the call completed.
+                                out.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": tcr.tool_call_id,
+                                    "content": "(unsupported tool result variant)",
+                                }));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        #[allow(deprecated)]
+        Some(req_input::Type::UserQuery(uq)) => {
+            out.push(json!({ "role": "user", "content": uq.query }));
+        }
+        _ => {}
+    }
+
+    Ok(out)
 }
 
 use warp_multi_agent_api::{ResponseEvent, Task, Message};
