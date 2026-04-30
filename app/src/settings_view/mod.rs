@@ -189,6 +189,7 @@ pub enum SettingsSection {
     About,
     #[default]
     Account,
+    AiProvider,
     MCPServers,
     BillingAndUsage,
     Appearance,
@@ -230,6 +231,7 @@ use std::fmt::{self, Display};
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            SettingsSection::AiProvider => write!(f, "AI Provider"),
             SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
             SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
             SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
@@ -322,6 +324,7 @@ impl FromStr for SettingsSection {
         match s {
             "About" => Ok(Self::About),
             "Account" => Ok(Self::Account),
+            "AI Provider" | "AiProvider" => Ok(Self::AiProvider),
             "AI" => Ok(Self::AI),
             "MCP Servers" => Ok(Self::MCPServers),
             "Billing and usage" => Ok(Self::BillingAndUsage),
