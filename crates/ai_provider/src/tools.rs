@@ -99,6 +99,12 @@ impl ToolRegistry {
                 &edit_write::EDIT_DOCUMENTS,
                 &edit_write::CREATE_DOCUMENTS,
                 &edit_write::WRITE_TO_LONG_RUNNING_SHELL_COMMAND,
+                &misc::SEARCH_CODEBASE,
+                &misc::CALL_MCP_TOOL,
+                &misc::USE_COMPUTER,
+                &misc::REQUEST_COMPUTER_USE,
+                &misc::INSERT_REVIEW_COMMENTS,
+                &misc::UPLOAD_FILE_ARTIFACT,
             ],
         }
     }
@@ -169,7 +175,7 @@ impl ToolRegistry {
 pub mod run_shell_command;
 pub mod read_search;
 pub mod edit_write;
-// pub mod misc;
+pub mod misc;
 
 #[cfg(test)]
 mod tests {
