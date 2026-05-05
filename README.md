@@ -1,8 +1,8 @@
-# WarpOss — fork with bring-your-own LLM endpoint
+# Woz — fork with bring-your-own LLM endpoint
 
-This is a fork of [warpdotdev/warp](https://github.com/warpdotdev/warp) that strips out the warp.dev account, login wizard, and cloud surfaces, and replaces them with a Settings page where you point Warp at any OpenAI- or Anthropic-compatible LLM endpoint (LiteLLM, OpenRouter, Ollama, vLLM, your own gateway — anything that speaks `/v1/chat/completions`).
+This is a fork of [warpdotdev/warp](https://github.com/warpdotdev/warp) that strips out the warp.dev account, login wizard, and cloud surfaces, and replaces them with a Settings page where you point Warp at any OpenAI- or Anthropic-compatible LLM endpoint (LiteLLM, OpenRouter, Ollama, vLLM, your own gateway — anything that speaks `/v1/chat/completions`). Named after Steve Wozniak.
 
-It runs as the `Channel::Oss` build (`WarpOss.app`) and ships with full agentic tool use (18 client-side tools — shell, file edits, grep, ripgrep, MCP, etc.) wired through the same Warp protobuf transaction protocol the upstream client uses.
+It runs as the `Channel::Oss` build (`Woz.app`) and ships with full agentic tool use (18 client-side tools — shell, file edits, grep, ripgrep, MCP, etc.) wired through the same Warp protobuf transaction protocol the upstream client uses. The macOS bundle identifier remains `dev.warp.WarpOss` so user settings persist across the rename.
 
 ## What's different from upstream
 
@@ -30,7 +30,7 @@ cargo bundle --bin warp-oss
 The bundled app lands at:
 
 ```
-target/debug/bundle/osx/WarpOss.app
+target/debug/bundle/osx/Woz.app
 ```
 
 For a release build:
